@@ -5,13 +5,17 @@ change.
 
 ## Current Phase
 
-- Specification aligned. Implementation not started.
+- Phase 0 complete — NestJS + Next.js monorepo
+  initialized with Prisma 7, PostgreSQL, Redis, BullMQ.
+- Next: Phase 1 — Domain (Competition models,
+  lifecycle, guards, admin hooks).
 
 ## Current Goal
 
-- Inspect the existing Hirance NestJS + Next.js codebase
-  and produce a short architecture assessment before
-  Phase 1 domain work.
+- Start Phase 1 domain work: `nest g` live-challenge
+  module, Competition / CompetitionParticipant /
+  CompetitionEvent Prisma models, nullable Job
+  competition relation, lifecycle + permissions.
 
 ## Completed
 
@@ -21,6 +25,19 @@ change.
   stack and feature.
 - Locked NestJS scaffolding to Nest CLI (`nest g`) and
   the database to Prisma 7 + PostgreSQL.
+- Phase 0 — Project initialization:
+  - npm workspaces monorepo: `apps/api` + `apps/web`
+  - NestJS API (strict TS, `/api` prefix, port 3001)
+  - Next.js App Router + Tailwind (port 3000)
+  - Prisma 7 + PostgreSQL via `prisma.config.ts`,
+    `@prisma/adapter-pg`, core User / Company /
+    CompanyMembership / Job models, `init_core`
+    migration
+  - Redis + BullMQ + Throttler wired in Nest
+  - Passport JWT packages installed (auth logic later)
+  - Socket.IO server + client packages installed
+  - `docker-compose.yml` for Postgres 16 + Redis 7
+  - Verified `GET /api/health` and Next.js homepage
 
 ## In Progress
 
@@ -28,33 +45,21 @@ change.
 
 ## Next Up
 
-- Inspect existing User, Employer, Company,
-  CompanyMembership, Job, auth, guards, Redis, queue,
-  WebSocket, Prisma/Postgres, notifications, and Next.js
-  job UI.
-- Phase 1 — Domain via Nest CLI + Prisma 7: Competition,
-  Participant, lifecycle, Job relation, permissions,
-  admin hooks.
+- Phase 1 — Domain via Nest CLI + Prisma 7:
+  Competition, Participant, lifecycle, Job relation,
+  permissions, admin hooks.
 
 ## Open Questions
 
-- Confirm whether Prisma 7 is already in the Hirance API
-  or must be initialized with `npx prisma init`.
-- Confirm the existing queue (BullMQ vs other NestJS
-  worker).
-- Confirm auth strategy for HTTP and Socket.IO (JWT,
-  cookie, Passport).
-- Confirm Next.js router (`app/` vs `pages/`) and the
-  existing job creation component path.
-- Confirm monorepo layout (`apps/api` + `apps/web` vs
-  separate repos).
-- Confirm whether an admin UI already exists in Next.js
-  or as a NestJS admin module.
 - Confirm whether WebRTC screen sharing is required for
   the first production release (Phase 7 is optional).
+- Confirm whether an admin UI should live in Next.js
+  or as NestJS admin endpoints only for early phases.
 
 ## Architecture Decisions
 
+- Monorepo layout: `apps/api` (NestJS) + `apps/web`
+  (Next.js App Router). npm workspaces.
 - NestJS owns scoring, timer, authorization, and publish
   rules. Next.js is UI only.
 - NestJS modules, controllers, services, gateways,
@@ -62,6 +67,12 @@ change.
 - Database is Prisma 7 + PostgreSQL. Initialize and
   migrate with Prisma CLI. Use `@prisma/adapter-pg`.
   Do not use TypeORM.
+- Nest 12 scaffold is ESM (`"type": "module"`); Prisma
+  client uses default ESM output (not `moduleFormat =
+  "cjs"`).
+- Auth strategy: Passport JWT (packages present; login
+  flows in a later phase).
+- Queue: BullMQ backed by Redis.
 - Reuse the existing Job model with a nullable
   competition relation. No second Job model.
 - PostgreSQL is the score source of truth. Redis is
@@ -83,3 +94,5 @@ change.
 - Do not reintroduce Django, Celery, Django Admin, or
   TypeORM.
 - Prefer Nest CLI and Prisma 7 CLI for initialization.
+- Phase 0 left competition domain out of scope by
+  design.

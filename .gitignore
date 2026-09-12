@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+apps/api/.env
+apps/web/.env.local
+
+# Build outputs
+dist/
+.next/
+out/
+build/
+
+# Prisma generated client
+apps/api/src/generated/
+
+# Logs and coverage
+logs/
+*.log
+npm-debug.log*
+coverage/
+.nyc_output/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Misc
+*.tsbuildinfo
+.turbo/

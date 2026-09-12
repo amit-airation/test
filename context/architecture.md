@@ -12,10 +12,14 @@
 | Workers      | BullMQ or existing NestJS queue                 | Finalization, notifications, cleanup, reconcile   |
 | Media        | WebRTC + SFU (optional, later)                  | Screen share only — never scoring                 |
 
-Inspect the existing Hirance NestJS and Next.js apps and
-reuse their auth, queue, API client, and UI kit.
+Greenfield monorepo layout (Phase 0):
 
-If NestJS artifacts or Prisma are missing, create them with CLIs.
+```text
+apps/api/   NestJS API (port 3001, global prefix /api)
+apps/web/   Next.js App Router (port 3000)
+```
+
+Reuse auth, queue, API client, and UI kit as they are added.
 Do not introduce TypeORM. Prisma 7 uses `prisma.config.ts`, the
 `prisma-client` generator, and `@prisma/adapter-pg`.
 
