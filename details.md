@@ -41,36 +41,40 @@ The system must provide:
 
 # 1. First inspect the existing codebase
 
+The stack is **NestJS** on the backend and **Next.js** on the frontend.
+
 Before writing code:
 
-1. Inspect the complete Django project structure.
+1. Inspect the complete NestJS API and Next.js app structure.
 2. Identify:
 
-   * User model
-   * Employer model
-   * Company model
+   * User entity / model
+   * Employer entity / model
+   * Company entity / model
    * CompanyMembership
-   * Job model
+   * Job entity / model
    * Job status implementation
    * Job creation APIs
    * Job publish APIs
-   * permissions
-   * authentication
+   * Guards, policies, and permission checks
+   * Authentication (JWT / session / Passport)
    * Redis configuration
-   * Celery configuration
-   * ASGI/WebSocket implementation
-   * PostgreSQL configuration
+   * Queue / worker configuration (BullMQ or existing queue)
+   * WebSocket / Socket.IO gateway implementation
+   * PostgreSQL / ORM configuration (TypeORM, Prisma, or existing)
    * existing notification/event systems
-3. Identify existing reusable components.
+   * Next.js app router (or pages router), shared UI, and job-creation components
+3. Identify existing reusable modules, services, DTOs, and UI components.
 4. Do NOT create duplicate implementations.
 5. Reuse existing:
 
    * User/company relationships
    * Job publishing logic
    * authentication
-   * permissions
+   * guards / permissions
    * WebSocket infrastructure
    * event/notification patterns
+   * Next.js job creation UI
 6. Preserve existing API response shapes unless a new competition endpoint is required.
 7. Do not make unrelated UI or architecture changes.
 
@@ -101,57 +105,108 @@ Do not introduce microservices unless the existing architecture genuinely requir
 
 The initial implementation should remain compatible with the existing:
 
-* Django
-* Django REST Framework
+* NestJS
+* Next.js
 * PostgreSQL
 * Redis
-* Celery
-* ASGI
-* WebSockets
+* BullMQ (or the existing NestJS queue/worker stack)
+* WebSockets / Socket.IO
+* existing ORM
 
 architecture.
 
+All competition business logic, scoring, timers, and authorization live in NestJS.
+
+Next.js is the UI layer. Do not put competition scoring, timer authority, or job-publish rules in Next.js Route Handlers / API routes.
+
 ---
 
-# 3. Suggested Django app
+# 3. Suggested NestJS module
 
-Create a dedicated app such as:
+Create a dedicated NestJS module such as:
 
 ```text
-apps/live_challenge/
+src/modules/live-challenge/
 ```
+
+or the equivalent path used by the existing NestJS project (`apps/api/src/modules/live-challenge/`, etc.).
 
 Keep competition-specific functionality isolated from the normal Jobs/Application domain.
 
 Suggested structure:
 
 ```text
-apps/live_challenge/
-    __init__.py
-    admin.py
-    apps.py
-    constants.py
-    enums.py
-    models.py
-    permissions.py
-    serializers.py
-    selectors.py
-    services.py
-    validators.py
-    repositories.py
-    urls.py
-    views.py
-    consumers.py
-    routing.py
-    tasks.py
-    events.py
-    exceptions.py
+src/modules/live-challenge/
+    live-challenge.module.ts
+    constants.ts
+    enums.ts
+    exceptions.ts
+    events.ts
+
+    entities/
+        competition.entity.ts
+        competition-participant.entity.ts
+        competition-event.entity.ts
+
+    dto/
+        create-competition.dto.ts
+        join-competition.dto.ts
+        competition-query.dto.ts
+
+    repositories/
+        competition.repository.ts
+        competition-participant.repository.ts
+
+    services/
+        competition.service.ts
+        competition-lifecycle.service.ts
+        competition-scoring.service.ts
+        competition-leaderboard.service.ts
+        competition-timer.service.ts
+
+    controllers/
+        competition.controller.ts
+
+    gateways/
+        competition.gateway.ts
+
+    guards/
+        competition-participant.guard.ts
+        competition-admin.guard.ts
+        competition-observer.guard.ts
+
+    processors/
+        competition.processor.ts
+
+    validators/
+        competition-job.validator.ts
+
     tests/
 ```
 
-Do not duplicate Job business logic inside this app.
+On the Next.js side, keep UI isolated as well:
 
-The competition app should orchestrate existing Job functionality.
+```text
+app/competition/[id]/
+    page.tsx                 # participant dashboard
+    live/page.tsx            # observer / TV mode
+components/competition/
+    countdown.tsx
+    score-card.tsx
+    leaderboard.tsx
+    job-create-entry.tsx
+    observer-dashboard.tsx
+lib/competition/
+    api.ts
+    socket.ts
+    types.ts
+```
+
+Follow the existing Next.js routing convention (`app/` or `pages/`).
+
+Do not duplicate Job business logic inside the competition module.
+
+The competition module should orchestrate existing Job functionality through the existing NestJS Job service.
 
 ---
 
@@ -189,7 +244,7 @@ FINALIZED
 CANCELLED
 ```
 
-Use Django choices/enums consistently with the existing project conventions.
+Use TypeScript enums consistently with the existing project conventions (and persist them as PostgreSQL enums or checked string columns, matching the current ORM style).
 
 ---
 
@@ -239,13 +294,17 @@ Reuse the existing Job model.
 
 Add a nullable relationship if appropriate:
 
-```text
-competition = ForeignKey(
-    Competition,
-    null=True,
-    blank=True,
-    on_delete=...
-)
+```ts
+@ManyToOne(() => Competition, { nullable: true, onDelete: 'SET NULL' })
+@JoinColumn({ name: 'competition_id' })
+competition?: Competition | null;
+```
+
+or the Prisma / existing-ORM equivalent:
+
+```prisma
+competition   Competition? @relation(fields: [competitionId], references: [id])
+competitionId String?
 ```
 
 or an equivalent existing architecture if the Job model already supports metadata.
@@ -344,6 +403,8 @@ minimum description length
 
 Do not weaken normal production Job validation merely for the competition.
 
+Implement extra rules in NestJS validators / pipes / a dedicated competition-job validator that runs beside the existing Job validation.
+
 ---
 
 # 10. Competition lifecycle
@@ -384,13 +445,13 @@ The timer is critical.
 
 Never trust:
 
-```javascript
+```ts
 Date.now()
 ```
 
-as the competition authority.
+on the Next.js client as the competition authority.
 
-The server must define:
+The NestJS server must define:
 
 ```text
 actual_start_at
@@ -408,9 +469,9 @@ The client should receive:
 }
 ```
 
-The frontend calculates the visual countdown from server time.
+The Next.js client calculates the visual countdown from server time.
 
-The backend must independently validate whether the competition is active.
+NestJS must independently validate whether the competition is active on every publish and state-changing request.
 
 ---
 
@@ -422,13 +483,13 @@ When the competition starts:
 2. Calculate `end_at`.
 3. Set status to `LIVE`.
 4. Notify all participants.
-5. Broadcast `COMPETITION_STARTED`.
-6. Start required background/finalization task.
+5. Broadcast `COMPETITION_STARTED` through the NestJS WebSocket gateway.
+6. Start required background/finalization job (BullMQ / existing queue).
 7. Make job publishing competition-aware.
 
-Do not depend solely on Celery to determine whether the competition is over.
+Do not depend solely on a queued worker to determine whether the competition is over.
 
-The API must always check the authoritative timestamps.
+The NestJS API must always check the authoritative timestamps.
 
 ---
 
@@ -469,9 +530,9 @@ and two publish requests arrive at:
 15:05:00.100
 ```
 
-The backend must determine eligibility using server time and transaction-safe logic.
+The NestJS backend must determine eligibility using server time and transaction-safe logic.
 
-Never rely on the frontend countdown.
+Never rely on the Next.js countdown.
 
 Define and document the exact policy:
 
@@ -488,7 +549,7 @@ Use database/server timestamps consistently.
 
 Do not create a second independent "competition publish" implementation.
 
-Reuse the existing Job publish service.
+Reuse the existing NestJS Job publish service.
 
 The flow should conceptually be:
 
@@ -520,9 +581,9 @@ The score update must be safe under concurrent requests.
 
 Never do:
 
-```python
-participant.score += 1
-participant.save()
+```ts
+participant.score += 1;
+await participantRepository.save(participant);
 ```
 
 without proper transaction handling.
@@ -532,11 +593,19 @@ Avoid lost updates.
 Use database-safe atomic operations such as:
 
 ```text
-F expressions
-transaction.atomic()
-row locking where required
+ORM increment (TypeORM increment / Prisma increment)
+transaction wrappers (DataSource.transaction / prisma.$transaction)
+row locking (SELECT ... FOR UPDATE) where required
 unique constraints
 idempotency keys
+```
+
+Example conceptual update:
+
+```sql
+UPDATE competition_participants
+SET final_score = final_score + 1
+WHERE id = $1;
 ```
 
 The exact implementation must be based on the existing data model.
@@ -575,13 +644,13 @@ score +1
 
 only.
 
-Use the Job's identity and/or an appropriate idempotency mechanism.
+Use the Job's identity and/or an appropriate idempotency mechanism (NestJS interceptor / header such as `Idempotency-Key`, plus a unique database constraint on scored job IDs).
 
 ---
 
 # 18. Real-time communication
 
-Use the existing Django ASGI/WebSocket architecture.
+Use the existing NestJS WebSocket / Socket.IO architecture.
 
 Use WebSockets for:
 
@@ -595,13 +664,15 @@ Use WebSockets for:
 * connection state
 * competition end
 
-Do NOT stream screen video through Django WebSockets.
+Do NOT stream screen video through NestJS WebSockets.
+
+The Next.js client should subscribe through a dedicated client-side hook / provider. Real-time UI must be Client Components. Do not attempt to hold Socket.IO connections inside React Server Components.
 
 ---
 
 # 19. WebSocket channels
 
-Design channels conceptually as:
+Design rooms / channels conceptually as:
 
 ```text
 competition:<competition_id>
@@ -617,7 +688,9 @@ competition:<competition_id>:participant:<participant_id>
 
 for participant-specific events.
 
-Permission-check every connection.
+Authenticate the socket connection with the same NestJS auth strategy used by HTTP (JWT, cookie, etc.).
+
+Permission-check every connection and every room join in the gateway.
 
 A participant must not subscribe to another private participant channel.
 
@@ -663,7 +736,7 @@ Example:
 }
 ```
 
-Keep event contracts versionable and documented.
+Keep event contracts versionable and documented. Share TypeScript types between NestJS and Next.js if the monorepo already supports a shared package.
 
 ---
 
@@ -703,7 +776,7 @@ Do not allow frontend sorting to determine the official ranking.
 
 Do not execute expensive queries for every WebSocket client independently.
 
-Create an efficient leaderboard service.
+Create an efficient leaderboard service in NestJS.
 
 For a small competition:
 
@@ -733,23 +806,26 @@ Inspect actual query plans before adding unnecessary indexes.
 
 Redis can be used for:
 
-* WebSocket fan-out
+* WebSocket / Socket.IO adapter fan-out (required for multi-instance NestJS)
 * presence
 * heartbeat
 * ephemeral competition state
 * leaderboard cache
 * short-lived locks where genuinely required
 * pub/sub
+* BullMQ backing store
 
 Do not use Redis as the permanent source of truth.
 
 PostgreSQL remains authoritative.
 
+If the API runs more than one NestJS instance, use the Redis Socket.IO adapter so broadcasts reach every connected Next.js client.
+
 ---
 
-# 24. Celery usage
+# 24. Queue / worker usage
 
-Use Celery for asynchronous work such as:
+Use BullMQ (or the existing NestJS queue) for asynchronous work such as:
 
 ```text
 competition finalization
@@ -760,15 +836,21 @@ cleanup
 reconciliation
 ```
 
-Do not use Celery as the only mechanism that determines whether a job can be published.
+Do not use a background job as the only mechanism that determines whether a job can be published.
 
-The API must enforce the competition time window itself.
+The NestJS HTTP API must enforce the competition time window itself.
 
 ---
 
 # 25. Participant UI
 
-Build a dedicated competition page.
+Build a dedicated Next.js competition page.
+
+Example route:
+
+```text
+/competition/[id]
+```
 
 Example:
 
@@ -801,7 +883,7 @@ Example:
 
 # 26. Job creation UI
 
-Reuse the existing Hirance job creation UI/components wherever possible.
+Reuse the existing Next.js / Hirance job creation UI/components wherever possible.
 
 Do not create a completely separate job creation form unless the existing UI cannot support the competition.
 
@@ -817,11 +899,13 @@ Leaderboard
 
 The user should not need to manually refresh.
 
+Wire the existing job form to the existing NestJS Job APIs with competition context. Keep live score/rank/timer in Client Components subscribed to the NestJS gateway.
+
 ---
 
 # 27. Live observer dashboard
 
-Create a dedicated observer/admin screen.
+Create a dedicated Next.js observer/admin screen.
 
 Primary purpose:
 
@@ -890,7 +974,7 @@ Animations must not affect functionality or accessibility.
 Provide:
 
 ```text
-/competition/<id>/live
+/competition/[id]/live
 ```
 
 with a presentation mode.
@@ -916,7 +1000,7 @@ If required, use:
 
 **WebRTC** for screen streaming.
 
-Do NOT send video frames through Django WebSockets.
+Do NOT send video frames through NestJS WebSockets.
 
 Architecture:
 
@@ -932,11 +1016,13 @@ Candidate Browser
 Observer 1        Observer 2
 ```
 
-Use an SFU/media infrastructure rather than making Django act as a media server.
+Use an SFU/media infrastructure rather than making NestJS act as a media server.
 
 Possible technology options should be evaluated based on deployment complexity and expected scale.
 
 Prefer a managed WebRTC/SFU solution initially if it materially reduces operational complexity.
+
+NestJS may mint short-lived signaling / join credentials. Next.js only hosts the participant and observer WebRTC clients.
 
 ---
 
@@ -1054,6 +1140,8 @@ Never reset the timer based on reconnection.
 
 Never reset the score.
 
+The Next.js client must re-fetch HTTP snapshot state after socket reconnect, then resume live events.
+
 ---
 
 # 35. Anti-cheating / abuse controls
@@ -1062,7 +1150,7 @@ At minimum:
 
 * server-authoritative timer
 * server-authoritative score
-* permission checks
+* NestJS guards on HTTP and WebSocket
 * competition membership validation
 * competition status validation
 * job validation
@@ -1130,7 +1218,7 @@ Do not store sensitive data unnecessarily.
 
 # 37. Security
 
-Enforce:
+Enforce with NestJS guards, policies, and service-level checks:
 
 ### Participant
 
@@ -1178,32 +1266,36 @@ Can:
 * inspect audit events
 * view results
 
-Use existing Django permissions/company membership wherever applicable.
+Use existing NestJS auth, company-membership checks, and role/permission guards wherever applicable.
+
+Next.js pages must hide unauthorized UI, but hiding UI is not authorization. NestJS remains the authority.
 
 ---
 
 # 38. API design
 
-Design clean APIs such as:
+Design clean NestJS REST endpoints such as:
 
 ```text
 POST   /competitions/
-GET    /competitions/<id>/
-POST   /competitions/<id>/join/
-POST   /competitions/<id>/start/
-POST   /competitions/<id>/end/
-POST   /competitions/<id>/finalize/
+GET    /competitions/:id/
+POST   /competitions/:id/join/
+POST   /competitions/:id/start/
+POST   /competitions/:id/end/
+POST   /competitions/:id/finalize/
 
-GET    /competitions/<id>/leaderboard/
-GET    /competitions/<id>/participants/
-GET    /competitions/<id>/events/
+GET    /competitions/:id/leaderboard/
+GET    /competitions/:id/participants/
+GET    /competitions/:id/events/
 
-GET    /competitions/<id>/me/
+GET    /competitions/:id/me/
 ```
 
 Do not blindly implement these exact URLs if the project has an existing URL convention.
 
-Follow existing API conventions.
+Follow existing NestJS global prefix, versioning, and DTO conventions (`ValidationPipe`, class-validator, existing response interceptor / envelope).
+
+Next.js should call these NestJS endpoints through the existing API client. Do not re-implement them as Next.js Route Handlers.
 
 ---
 
@@ -1320,7 +1412,7 @@ Examples:
 * valid status values
 * unique competition/job relationship where applicable
 
-Do not rely only on serializer validation.
+Do not rely only on DTO / class-validator checks.
 
 ---
 
@@ -1353,7 +1445,7 @@ SCORE = 12
 
 before the database transaction is confirmed.
 
-Use transaction commit hooks where appropriate.
+Use after-commit hooks / emit-after-transaction patterns in the NestJS service. Do not emit from inside an uncommitted transaction.
 
 ---
 
@@ -1370,19 +1462,24 @@ Results finalized
 Winner announced
 ```
 
-Reuse the existing notification/email infrastructure instead of implementing a second email system.
+Reuse the existing NestJS notification/email infrastructure instead of implementing a second email system.
 
 ---
 
 # 45. Admin
 
-Add Django Admin support for:
+Add admin support for:
 
 ```text
 Competition
 CompetitionParticipant
 CompetitionEvent
 ```
+
+Use the existing admin approach in this project:
+
+* existing NestJS admin module, or
+* existing Next.js admin UI talking to NestJS admin endpoints
 
 Admin should provide:
 
@@ -1396,6 +1493,8 @@ Admin should provide:
 * audit history
 
 Do not allow dangerous direct modifications that could invalidate a live competition without explicit safeguards.
+
+Do not invent a Django-style admin if the project already has a Next.js admin surface.
 
 ---
 
@@ -1436,7 +1535,8 @@ Monitor:
 * database query latency
 * leaderboard latency
 * WebRTC/SFU metrics if implemented
-* Celery task failures
+* BullMQ / worker task failures
+* Next.js client reconnect rate
 
 Integrate with the project's existing monitoring/Datadog setup if present.
 
@@ -1450,7 +1550,7 @@ However, do not configure a rate limit that prevents legitimate competition acti
 
 The challenge is intentionally high-frequency.
 
-Use competition-specific limits where required.
+Use NestJS throttling / competition-specific limits where required.
 
 Example:
 
@@ -1497,9 +1597,9 @@ Redis
     ↓
 short-lived leaderboard/realtime state
 
-WebSocket
+NestJS WebSocket gateway
     ↓
-broadcast updates
+broadcast updates to Next.js clients
 ```
 
 Do not make every observer repeatedly call:
@@ -1609,14 +1709,14 @@ Document the rule in the UI before the competition starts.
 
 Write comprehensive tests.
 
-### Model tests
+### NestJS unit / entity tests
 
 * competition states
 * participant uniqueness
 * job relationship
 * constraints
 
-### Service tests
+### NestJS service tests
 
 * start competition
 * end competition
@@ -1635,6 +1735,7 @@ Write comprehensive tests.
 * modified competition ID
 * score manipulation
 * rank manipulation
+* WebSocket join without permission
 
 ### Concurrency tests
 
@@ -1651,7 +1752,7 @@ WebSocket reconnect
 
 ### API tests
 
-All endpoints.
+All NestJS endpoints (supertest / existing e2e setup).
 
 ### WebSocket tests
 
@@ -1664,13 +1765,17 @@ All endpoints.
 * reconnect
 * competition end
 
-### Frontend tests
+### Next.js tests
 
 * countdown
 * score update
 * ranking update
 * reconnect
 * final state
+* participant page
+* observer / live page
+
+Use the project's existing test stack (typically Jest on NestJS; Jest / Playwright / Testing Library on Next.js).
 
 ---
 
@@ -1716,7 +1821,7 @@ Explicitly test:
 ```text
 PostgreSQL temporarily unavailable
 Redis unavailable
-Celery unavailable
+BullMQ / worker unavailable
 participant disconnects
 observer disconnects
 candidate refreshes browser
@@ -1725,6 +1830,7 @@ candidate retries publish
 API timeout
 WebSocket reconnect
 server restart
+Next.js client hydration / remount
 competition ends while request is processing
 ```
 
@@ -1755,9 +1861,9 @@ one active competition session per participant
 
 or allow multiple sessions but ensure they cannot produce duplicate scoring or bypass limits.
 
-Do not rely only on frontend localStorage.
+Do not rely only on frontend localStorage or Next.js client state.
 
-Enforce server-side.
+Enforce server-side in NestJS.
 
 ---
 
@@ -1778,7 +1884,7 @@ If screen sharing is implemented:
 
 # 58. UI states
 
-Handle all states:
+Handle all states in Next.js:
 
 ```text
 Competition not started
@@ -1862,16 +1968,16 @@ Do NOT implement everything simultaneously.
 
 Implement in this order:
 
-### Phase 1 — Domain
+### Phase 1 — Domain (NestJS)
 
-* Competition
-* Participant
+* Competition entity
+* Participant entity
 * Competition lifecycle
 * Job relationship
-* permissions
-* admin
+* guards / permissions
+* admin endpoints / admin UI hooks
 
-### Phase 2 — Competition job flow
+### Phase 2 — Competition job flow (NestJS)
 
 * join
 * start
@@ -1880,17 +1986,17 @@ Implement in this order:
 * atomic score
 * finalization
 
-### Phase 3 — Real-time
+### Phase 3 — Real-time (NestJS + Next.js client socket)
 
 * WebSocket authentication
-* competition channel
+* competition room
 * score events
 * leaderboard events
 * presence
 * reconnect
 * timer synchronization
 
-### Phase 4 — Participant UI
+### Phase 4 — Participant UI (Next.js)
 
 * competition page
 * countdown
@@ -1899,7 +2005,7 @@ Implement in this order:
 * leaderboard
 * job creation integration
 
-### Phase 5 — Observer UI
+### Phase 5 — Observer UI (Next.js)
 
 * live leaderboard
 * top 3
@@ -1944,31 +2050,34 @@ Do NOT:
 * increment score before successful publish
 * increment score from WebSocket messages
 * use Redis as the permanent score source
-* stream video through Django WebSockets
+* stream video through NestJS WebSockets
 * create a duplicate Job model
 * duplicate existing Job publishing logic
 * allow arbitrary competition IDs
 * allow score/rank updates from clients
-* depend exclusively on Celery for competition expiration
+* depend exclusively on BullMQ / workers for competition expiration
 * broadcast database state before transaction commit
 * allow retries to double-count a job
+* put scoring, timer authority, or publish rules in Next.js Route Handlers
+* hold Socket.IO connections in React Server Components
 
 Always:
 
-* use server time
+* use server time in NestJS
 * use PostgreSQL as authoritative state
 * use transactions
 * use idempotency
-* validate permissions server-side
+* validate permissions in NestJS guards and services
 * use WebSockets for live state propagation
 * use Redis for ephemeral/realtime workloads
-* use Celery for asynchronous processing
+* use BullMQ / existing workers for asynchronous processing
 * reuse existing Hirance domain logic
 * keep APIs backward-compatible
 * add proper indexes
 * test concurrency
 * test exact end-time behavior
 * make final results immutable
+* share TypeScript types where the monorepo already supports it
 
 ---
 
@@ -1976,24 +2085,24 @@ Always:
 
 Implement the complete feature and provide:
 
-1. Database models
+1. Database entities / models
 2. Migrations
-3. Services
-4. Selectors/repositories if appropriate
-5. Serializers
-6. REST APIs
-7. WebSocket consumers/routing
-8. Redis integration
-9. Celery tasks
-10. Permissions
-11. Django Admin
-12. Participant UI
-13. Observer/live dashboard
+3. NestJS services
+4. Repositories if appropriate
+5. DTOs + validation
+6. NestJS REST APIs
+7. NestJS WebSocket gateway / rooms
+8. Redis integration (including Socket.IO adapter if multi-instance)
+9. BullMQ / worker processors
+10. Guards / permissions
+11. Admin UI or admin endpoints
+12. Next.js participant UI
+13. Next.js observer/live dashboard
 14. Full-screen presentation mode
 15. Optional WebRTC screen sharing
 16. Audit events
 17. Logging
-18. Tests
+18. Tests (NestJS + Next.js)
 19. Load-test scenario
 20. Documentation
 21. Deployment/configuration requirements
@@ -2019,7 +2128,7 @@ Participants join
         ↓
 Competition starts
         ↓
-All clients receive synchronized timer
+All Next.js clients receive synchronized timer
         ↓
 Participant creates Job #1
         ↓
@@ -2066,4 +2175,4 @@ Audit trail available
 
 The final implementation must be production-ready, secure, transaction-safe, scalable, observable, and maintainable.
 
-Before making large architectural changes, inspect the existing Hirance codebase and reuse existing functionality wherever possible.
+Before making large architectural changes, inspect the existing Hirance NestJS and Next.js codebase and reuse existing functionality wherever possible.
