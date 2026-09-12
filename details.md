@@ -61,7 +61,7 @@ Before writing code:
    * Redis configuration
    * Queue / worker configuration (BullMQ or existing queue)
    * WebSocket / Socket.IO gateway implementation
-   * PostgreSQL / ORM configuration (TypeORM, Prisma, or existing)
+   * Prisma 7 + PostgreSQL (`prisma/schema.prisma`, `prisma.config.ts`, generated client)
    * existing notification/event systems
    * Next.js app router (or pages router), shared UI, and job-creation components
 3. Identify existing reusable modules, services, DTOs, and UI components.
@@ -111,9 +111,11 @@ The initial implementation should remain compatible with the existing:
 * Redis
 * BullMQ (or the existing NestJS queue/worker stack)
 * WebSockets / Socket.IO
-* existing ORM
+* Prisma 7 + PostgreSQL
 
 architecture.
+
+If the API or database does not exist yet, initialize them with CLIs. Do not hand-roll NestJS modules, controllers, services, gateways, or Prisma config when a schematic or Prisma command can create them.
 
 All competition business logic, scoring, timers, and authorization live in NestJS.
 
@@ -121,19 +123,59 @@ Next.js is the UI layer. Do not put competition scoring, timer authority, or job
 
 ---
 
-# 3. Suggested NestJS module
+# 3. CLI-first NestJS module and Prisma 7
 
-Create a dedicated NestJS module such as:
+Create NestJS building blocks with the **Nest CLI**. Create and evolve the database with the **Prisma 7 CLI**. Hand-write only the business logic inside those generated files.
 
-```text
-src/modules/live-challenge/
+If the NestJS app does not exist:
+
+```bash
+npm i -g @nestjs/cli
+nest new api
 ```
 
-or the equivalent path used by the existing NestJS project (`apps/api/src/modules/live-challenge/`, etc.).
+Use the existing NestJS app path if one already exists (`apps/api`, `backend`, etc.).
+
+## 3.1 Generate NestJS components with the CLI
+
+From the NestJS app root:
+
+```bash
+nest g module modules/live-challenge
+nest g resource modules/live-challenge/competition --no-spec false
+```
+
+Prefer `nest g` / `nest generate` for almost every NestJS artifact:
+
+```bash
+nest g module prisma
+nest g service prisma --flat
+
+nest g service modules/live-challenge/services/competition-lifecycle --flat
+nest g service modules/live-challenge/services/competition-scoring --flat
+nest g service modules/live-challenge/services/competition-leaderboard --flat
+nest g service modules/live-challenge/services/competition-timer --flat
+
+nest g gateway modules/live-challenge/gateways/competition --flat
+
+nest g guard modules/live-challenge/guards/competition-participant
+nest g guard modules/live-challenge/guards/competition-admin
+nest g guard modules/live-challenge/guards/competition-observer
+
+nest g class modules/live-challenge/dto/create-competition.dto --no-spec
+nest g class modules/live-challenge/dto/join-competition.dto --no-spec
+nest g class modules/live-challenge/dto/competition-query.dto --no-spec
+
+nest g interceptor modules/live-challenge/interceptors/idempotency
+nest g filter modules/live-challenge/filters/competition-exception
+nest g pipe modules/live-challenge/pipes/competition-status
+```
+
+Install official Nest packages with the CLI or npm when a schematic needs them (`@nestjs/websockets`, `@nestjs/platform-socket.io`, `@nestjs/config`, `@nestjs/bullmq`, `@nestjs/throttler`, `@nestjs/jwt`, etc.). Do not invent a parallel folder layout that the schematics will not own.
 
 Keep competition-specific functionality isolated from the normal Jobs/Application domain.
 
-Suggested structure:
+Suggested structure after CLI generation:
 
 ```text
 src/modules/live-challenge/
@@ -143,19 +185,10 @@ src/modules/live-challenge/
     exceptions.ts
     events.ts
 
-    entities/
-        competition.entity.ts
-        competition-participant.entity.ts
-        competition-event.entity.ts
-
     dto/
         create-competition.dto.ts
         join-competition.dto.ts
         competition-query.dto.ts
-
-    repositories/
-        competition.repository.ts
-        competition-participant.repository.ts
 
     services/
         competition.service.ts
@@ -183,6 +216,107 @@ src/modules/live-challenge/
 
     tests/
 ```
+
+Persistence lives in Prisma, not TypeORM entities:
+
+```text
+prisma/schema.prisma
+prisma/migrations/
+prisma.config.ts
+src/generated/prisma/          # Prisma 7 generated client
+src/prisma/prisma.module.ts    # nest g module prisma
+src/prisma/prisma.service.ts   # nest g service prisma --flat
+```
+
+## 3.2 Initialize Prisma 7 + PostgreSQL with the CLI
+
+If a database layer is required — and this feature requires one — use **Prisma 7** with **PostgreSQL**. Do not introduce TypeORM, Sequelize, or a second ORM.
+
+```bash
+npm install -D prisma@^7 dotenv
+npm install @prisma/client@^7 @prisma/adapter-pg pg
+
+npx prisma init --datasource-provider postgresql --output ../src/generated/prisma
+```
+
+That CLI must produce:
+
+* `prisma/schema.prisma`
+* `prisma.config.ts`
+* `.env` with `DATABASE_URL`
+
+Prisma 7 `prisma.config.ts` owns the datasource URL:
+
+```ts
+import "dotenv/config";
+import { defineConfig, env } from "prisma/config";
+
+export default defineConfig({
+  schema: "prisma/schema.prisma",
+  migrations: {
+    path: "prisma/migrations",
+  },
+  datasource: {
+    url: env("DATABASE_URL"),
+  },
+});
+```
+
+`schema.prisma` must use the Prisma 7 client generator and PostgreSQL:
+
+```prisma
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+```
+
+Connection URL stays in `.env`:
+
+```text
+DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/hirance?schema=public"
+```
+
+After editing models:
+
+```bash
+npx prisma migrate dev --name add_live_challenge
+npx prisma generate
+```
+
+Load env with NestJS `ConfigModule.forRoot()`. Generate `PrismaService` with the Nest CLI, then wire the Prisma 7 PostgreSQL driver adapter:
+
+```ts
+import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaClient } from "../generated/prisma/client";
+
+@Injectable()
+export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+  constructor() {
+    const adapter = new PrismaPg({
+      connectionString: process.env.DATABASE_URL as string,
+    });
+    super({ adapter });
+  }
+
+  async onModuleInit() {
+    await this.$connect();
+  }
+
+  async onModuleDestroy() {
+    await this.$disconnect();
+  }
+}
+```
+
+Export `PrismaService` from `PrismaModule` and import that module into `LiveChallengeModule`.
+
+Do not instantiate `PrismaClient` without `@prisma/adapter-pg`. Do not use the legacy `prisma-client-js` generator. Do not put `url` on the `datasource` block when Prisma 7 expects it in `prisma.config.ts`.
 
 On the Next.js side, keep UI isolated as well:
 
@@ -212,7 +346,7 @@ The competition module should orchestrate existing Job functionality through the
 
 # 4. Competition domain model
 
-Create a Competition entity.
+Create a Competition Prisma model.
 
 Conceptually:
 
@@ -244,7 +378,7 @@ FINALIZED
 CANCELLED
 ```
 
-Use TypeScript enums consistently with the existing project conventions (and persist them as PostgreSQL enums or checked string columns, matching the current ORM style).
+Persist statuses as Prisma enums in `prisma/schema.prisma` and share matching TypeScript enums with NestJS DTOs / services. Create and apply the models with `npx prisma migrate dev`. Do not add TypeORM entities.
 
 ---
 
@@ -292,22 +426,23 @@ Do NOT create a separate Job model.
 
 Reuse the existing Job model.
 
-Add a nullable relationship if appropriate:
-
-```ts
-@ManyToOne(() => Competition, { nullable: true, onDelete: 'SET NULL' })
-@JoinColumn({ name: 'competition_id' })
-competition?: Competition | null;
-```
-
-or the Prisma / existing-ORM equivalent:
+Add a nullable relation on the existing Prisma `Job` model:
 
 ```prisma
-competition   Competition? @relation(fields: [competitionId], references: [id])
-competitionId String?
+model Job {
+  // ...existing fields
+  competition   Competition? @relation(fields: [competitionId], references: [id])
+  competitionId String?
+}
+
+model Competition {
+  id   String @id @default(uuid())
+  jobs Job[]
+  // ...
+}
 ```
 
-or an equivalent existing architecture if the Job model already supports metadata.
+Apply it with `npx prisma migrate dev --name job_competition_relation`. If Job already supports equivalent metadata, reuse that instead of adding a second field.
 
 Normal jobs:
 
@@ -590,22 +725,27 @@ without proper transaction handling.
 
 Avoid lost updates.
 
-Use database-safe atomic operations such as:
+Use Prisma 7 database-safe atomic operations:
 
 ```text
-ORM increment (TypeORM increment / Prisma increment)
-transaction wrappers (DataSource.transaction / prisma.$transaction)
-row locking (SELECT ... FOR UPDATE) where required
+prisma.$transaction(...)
+prisma.competitionParticipant.update({
+  data: { finalScore: { increment: 1 } }
+})
+interactive transactions with SELECT ... FOR UPDATE when required
 unique constraints
 idempotency keys
 ```
 
-Example conceptual update:
+Example:
 
-```sql
-UPDATE competition_participants
-SET final_score = final_score + 1
-WHERE id = $1;
+```ts
+await this.prisma.$transaction(async (tx) => {
+  await tx.competitionParticipant.update({
+    where: { id: participantId },
+    data: { finalScore: { increment: 1 } },
+  });
+});
 ```
 
 The exact implementation must be based on the existing data model.
@@ -1968,12 +2108,15 @@ Do NOT implement everything simultaneously.
 
 Implement in this order:
 
-### Phase 1 — Domain (NestJS)
+### Phase 1 — Domain (NestJS + Prisma 7)
 
-* Competition entity
-* Participant entity
+* `nest g` module / resource / services / guards
+* `npx prisma init` if Prisma is not already present
+* Prisma 7 models: Competition, CompetitionParticipant, CompetitionEvent
+* nullable Job.competition relation
+* `npx prisma migrate dev` + `npx prisma generate`
+* PrismaService via Nest CLI + `@prisma/adapter-pg`
 * Competition lifecycle
-* Job relationship
 * guards / permissions
 * admin endpoints / admin UI hooks
 
@@ -2060,9 +2203,14 @@ Do NOT:
 * allow retries to double-count a job
 * put scoring, timer authority, or publish rules in Next.js Route Handlers
 * hold Socket.IO connections in React Server Components
+* hand-roll NestJS modules, controllers, services, gateways, or guards when `nest g` can create them
+* introduce TypeORM, Sequelize, or a second ORM
+* instantiate Prisma Client without the Prisma 7 `pg` driver adapter
 
 Always:
 
+* generate NestJS components with the Nest CLI
+* use Prisma 7 + PostgreSQL, initialized and migrated with the Prisma CLI
 * use server time in NestJS
 * use PostgreSQL as authoritative state
 * use transactions
@@ -2085,16 +2233,16 @@ Always:
 
 Implement the complete feature and provide:
 
-1. Database entities / models
-2. Migrations
-3. NestJS services
-4. Repositories if appropriate
-5. DTOs + validation
-6. NestJS REST APIs
-7. NestJS WebSocket gateway / rooms
+1. Prisma 7 schema + PostgreSQL models
+2. Prisma migrations (`npx prisma migrate dev`) and generated client
+3. NestJS services generated with `nest g`
+4. PrismaService (Nest CLI + `@prisma/adapter-pg`)
+5. DTOs + validation generated with `nest g class`
+6. NestJS REST APIs (`nest g resource` / controller)
+7. NestJS WebSocket gateway (`nest g gateway`)
 8. Redis integration (including Socket.IO adapter if multi-instance)
 9. BullMQ / worker processors
-10. Guards / permissions
+10. Guards / permissions (`nest g guard`)
 11. Admin UI or admin endpoints
 12. Next.js participant UI
 13. Next.js observer/live dashboard
@@ -2106,7 +2254,7 @@ Implement the complete feature and provide:
 19. Load-test scenario
 20. Documentation
 21. Deployment/configuration requirements
-22. Environment variables
+22. Environment variables (`DATABASE_URL`, etc.)
 23. API documentation
 24. WebSocket event documentation
 25. Architecture diagram

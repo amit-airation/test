@@ -90,7 +90,8 @@ and incomplete jobs never increase the score.
 - NestJS competition module, APIs, guards, scoring,
   lifecycle, and WebSocket gateway
 - Next.js participant, observer, and live/TV UI
-- PostgreSQL entities, migrations, indexes, constraints
+- Prisma 7 + PostgreSQL models, CLI migrations, indexes,
+  constraints
 - Redis for ephemeral realtime state and Socket.IO
   fan-out
 - BullMQ / existing workers for finalization,

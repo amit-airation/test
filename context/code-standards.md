@@ -3,7 +3,7 @@
 ## General
 
 - Inspect the existing Hirance NestJS and Next.js codebase
-  before adding modules, entities, or UI.
+  before adding modules or UI.
 - Reuse Job publish, auth, company membership, notifications,
   WebSockets, and the job creation form.
 - Keep the competition module isolated from the normal
@@ -29,6 +29,9 @@
 
 ## NestJS
 
+- Create almost every NestJS artifact with the Nest CLI
+  (`nest g module|resource|controller|service|gateway|guard|class|interceptor|pipe|filter`).
+  Hand-write only the logic inside generated files.
 - Put competition logic in a dedicated module such as
   `src/modules/live-challenge/`.
 - Controllers stay thin. Services own lifecycle, scoring,
@@ -38,9 +41,8 @@
 - Reuse the existing Job service for create/publish.
   Add competition validation beside it, not a second
   publish pipeline.
-- Use the existing ORM transaction API
-  (`DataSource.transaction` / `prisma.$transaction`).
-- Atomic score updates only: increment, row lock, unique
+- Use Prisma 7 transactions: `prisma.$transaction(...)`.
+- Atomic score updates only: `increment`, row lock, unique
   constraints, idempotency keys. Never
   `participant.score += 1` then `save()`.
 - Emit WebSocket events only after commit.
@@ -86,8 +88,27 @@ GET    /competitions/:id/me/
 - TV / live mode may scale type and spacing but must use
   the same tokens.
 
-## Data and Storage
+## Prisma 7 + PostgreSQL
 
+- If a database is required, use Prisma 7 with PostgreSQL
+  only. Do not add TypeORM or a second ORM.
+- Initialize and evolve with CLI:
+
+```bash
+npx prisma init --datasource-provider postgresql --output ../src/generated/prisma
+npx prisma migrate dev --name <change>
+npx prisma generate
+```
+
+- Keep `DATABASE_URL` in `.env`. Put the URL in
+  `prisma.config.ts` (`defineConfig` + `env("DATABASE_URL")`).
+- Schema must use `provider = "prisma-client"` and
+  `provider = "postgresql"`. Do not use legacy
+  `prisma-client-js`.
+- Generate `PrismaModule` / `PrismaService` with Nest CLI.
+  Construct `PrismaClient` with `PrismaPg` from
+  `@prisma/adapter-pg`.
+- Load env through `ConfigModule.forRoot()`.
 - PostgreSQL is authoritative for competitions,
   participants, jobs, scores, ranks, and audit events.
 - Redis is ephemeral: presence, cache, pub/sub, Socket.IO
@@ -103,9 +124,13 @@ GET    /competitions/:id/me/
 ## File Organization
 
 - `src/modules/live-challenge/` — NestJS competition
-  module (or existing NestJS module root)
-- `entities/` / Prisma models — persistence
-- `dto/` — request/response validation
+  module created with `nest g`
+- `prisma/schema.prisma` — Prisma 7 models
+- `prisma/migrations/` — Prisma CLI migrations
+- `prisma.config.ts` — Prisma 7 datasource config
+- `src/generated/prisma/` — generated Prisma Client
+- `src/prisma/` — PrismaModule + PrismaService
+- `dto/` — request/response validation (`nest g class`)
 - `services/` — lifecycle, scoring, leaderboard, timer
 - `gateways/` — Socket.IO rooms and events
 - `guards/` — participant / observer / admin

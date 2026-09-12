@@ -19,6 +19,8 @@ change.
   NestJS + Next.js + BullMQ + Socket.IO.
 - Filled `CLAUDE.md` and all `context/` files for this
   stack and feature.
+- Locked NestJS scaffolding to Nest CLI (`nest g`) and
+  the database to Prisma 7 + PostgreSQL.
 
 ## In Progress
 
@@ -28,13 +30,16 @@ change.
 
 - Inspect existing User, Employer, Company,
   CompanyMembership, Job, auth, guards, Redis, queue,
-  WebSocket, ORM, notifications, and Next.js job UI.
-- Phase 1 — Domain: Competition, Participant, lifecycle,
-  Job relation, permissions, admin hooks.
+  WebSocket, Prisma/Postgres, notifications, and Next.js
+  job UI.
+- Phase 1 — Domain via Nest CLI + Prisma 7: Competition,
+  Participant, lifecycle, Job relation, permissions,
+  admin hooks.
 
 ## Open Questions
 
-- Confirm the existing ORM (TypeORM vs Prisma vs other).
+- Confirm whether Prisma 7 is already in the Hirance API
+  or must be initialized with `npx prisma init`.
 - Confirm the existing queue (BullMQ vs other NestJS
   worker).
 - Confirm auth strategy for HTTP and Socket.IO (JWT,
@@ -52,6 +57,11 @@ change.
 
 - NestJS owns scoring, timer, authorization, and publish
   rules. Next.js is UI only.
+- NestJS modules, controllers, services, gateways,
+  guards, and DTOs are created with `nest g`.
+- Database is Prisma 7 + PostgreSQL. Initialize and
+  migrate with Prisma CLI. Use `@prisma/adapter-pg`.
+  Do not use TypeORM.
 - Reuse the existing Job model with a nullable
   competition relation. No second Job model.
 - PostgreSQL is the score source of truth. Redis is
@@ -70,4 +80,6 @@ change.
 - `details.md` is the full spec (sections 1–63).
 - Context files are the implementation contract for
   agents. Read them before coding.
-- Do not reintroduce Django, Celery, or Django Admin.
+- Do not reintroduce Django, Celery, Django Admin, or
+  TypeORM.
+- Prefer Nest CLI and Prisma 7 CLI for initialization.

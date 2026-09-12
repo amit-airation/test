@@ -4,16 +4,20 @@
 
 | Layer        | Technology                                      | Role                                              |
 | ------------ | ----------------------------------------------- | ------------------------------------------------- |
-| API          | NestJS + TypeScript                             | Domain, authz, scoring, timer, REST, WebSockets   |
+| API          | NestJS + TypeScript (Nest CLI)                  | Domain, authz, scoring, timer, REST, WebSockets   |
 | UI           | Next.js + TypeScript                            | Participant, observer, admin, and live/TV screens |
-| Realtime     | NestJS Gateway + Socket.IO                      | Live score, rank, timer, presence, end events     |
-| Database     | PostgreSQL + existing ORM (TypeORM or Prisma)   | Authoritative competition, job, and score state   |
+| Realtime     | NestJS Gateway + Socket.IO (`nest g gateway`)   | Live score, rank, timer, presence, end events     |
+| Database     | Prisma 7 + PostgreSQL                           | Authoritative competition, job, and score state   |
 | Cache / bus  | Redis                                           | Presence, leaderboard cache, Socket.IO adapter    |
 | Workers      | BullMQ or existing NestJS queue                 | Finalization, notifications, cleanup, reconcile   |
 | Media        | WebRTC + SFU (optional, later)                  | Screen share only — never scoring                 |
 
 Inspect the existing Hirance NestJS and Next.js apps and
-reuse their auth, ORM, queue, API client, and UI kit.
+reuse their auth, queue, API client, and UI kit.
+
+If NestJS artifacts or Prisma are missing, create them with CLIs.
+Do not introduce TypeORM. Prisma 7 uses `prisma.config.ts`, the
+`prisma-client` generator, and `@prisma/adapter-pg`.
 
 ## System Boundaries
 
@@ -38,7 +42,18 @@ reuse their auth, ORM, queue, API client, and UI kit.
 Next.js is the UI layer only. NestJS owns scoring, timer
 authority, authorization, and job-publish rules.
 
-## Suggested NestJS module
+## CLI-first NestJS module
+
+Generate with the Nest CLI, then fill in logic:
+
+```bash
+nest g module modules/live-challenge
+nest g resource modules/live-challenge/competition
+nest g module prisma
+nest g service prisma --flat
+nest g gateway modules/live-challenge/gateways/competition --flat
+nest g guard modules/live-challenge/guards/competition-participant
+```
 
 ```text
 src/modules/live-challenge/
@@ -47,9 +62,7 @@ src/modules/live-challenge/
     enums.ts
     exceptions.ts
     events.ts
-    entities/
     dto/
-    repositories/
     services/
     controllers/
     gateways/
@@ -57,6 +70,13 @@ src/modules/live-challenge/
     processors/
     validators/
     tests/
+
+prisma/schema.prisma
+prisma/migrations/
+prisma.config.ts
+src/generated/prisma/
+src/prisma/prisma.module.ts
+src/prisma/prisma.service.ts
 ```
 
 ## Suggested Next.js surfaces
@@ -73,9 +93,12 @@ differs.
 
 ## Storage Model
 
-- **PostgreSQL**: competitions, participants, jobs with
-  nullable `competition_id`, audit events, final scores,
-  final ranks. This is the only source of truth for score.
+- **PostgreSQL via Prisma 7**: competitions, participants,
+  jobs with nullable `competitionId`, audit events, final
+  scores, final ranks. This is the only source of truth
+  for score. Initialize with `npx prisma init
+  --datasource-provider postgresql`. Evolve with
+  `npx prisma migrate dev` and `npx prisma generate`.
 - **Redis**: Socket.IO adapter fan-out, presence,
   heartbeat, short-lived leaderboard cache, optional
   locks, BullMQ backing store.
@@ -180,9 +203,10 @@ Next.js holds sockets only in Client Components.
 3. Retries must not double-count a job. Use job identity
    and/or an idempotency key plus a unique constraint.
 4. Do not increment score with a read-modify-write save.
-   Use transactional atomic increment / row locking.
-5. PostgreSQL is authoritative. Redis is never the
-   permanent score source.
+   Use `prisma.$transaction` and `finalScore: { increment: 1 }`
+   or row locking.
+5. PostgreSQL via Prisma 7 is authoritative. Redis is
+   never the permanent score source.
 6. Do not create a second Job model or a second publish
    implementation.
 7. Do not put scoring, timer authority, or publish rules

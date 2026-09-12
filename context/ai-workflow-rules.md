@@ -10,8 +10,13 @@ before writing code. Produce a short architecture
 assessment that says where each piece belongs, then
 implement only the current phase.
 
-Do not invent Django, Celery, DRF, or Django Admin.
-The stack is NestJS + Next.js.
+Do not invent Django, Celery, DRF, Django Admin, or TypeORM.
+The stack is NestJS + Next.js + Prisma 7 + PostgreSQL.
+
+Generate NestJS components with `nest g`. Initialize and
+migrate the database with Prisma 7 CLI. Do not hand-create
+modules, controllers, services, gateways, or Prisma config
+when a CLI command exists.
 
 Do not infer product behavior that is not in `details.md`
 or these context files.
@@ -28,8 +33,8 @@ or these context files.
 
 Follow `details.md` section 60:
 
-1. Domain — entities, lifecycle, job relation, guards,
-   admin hooks
+1. Domain — `nest g` artifacts, Prisma 7 models + migrate,
+   lifecycle, job relation, guards, admin hooks
 2. Competition job flow — join, start, publish, atomic
    score, finalize
 3. Real-time — gateway auth, rooms, score/leaderboard
@@ -63,9 +68,10 @@ scope is too broad — split it.
   before implementing.
 - If a requirement is missing, add it as an open question
   in `progress-tracker.md` before continuing.
-- Prefer existing Hirance conventions for ORM, auth,
-  queues, API envelope, and UI kit when `details.md`
-  leaves the exact library open.
+- Prefer existing Hirance conventions for auth, queues,
+  API envelope, and UI kit when `details.md` leaves the
+  exact library open.
+- Database is not left open: Prisma 7 + PostgreSQL.
 
 ## Protected Files
 
@@ -115,9 +121,11 @@ Never:
 
 Always:
 
+- Generate NestJS components with the Nest CLI
+- Use Prisma 7 + PostgreSQL via Prisma CLI
 - Use NestJS server time
 - Use PostgreSQL as authoritative state
-- Use transactions and idempotency
+- Use `prisma.$transaction` and idempotency
 - Validate permissions in NestJS
 - Reuse existing Hirance domain logic
 - Keep APIs backward-compatible
