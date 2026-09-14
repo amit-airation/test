@@ -116,42 +116,6 @@ export function createCompany(token: string, name: string) {
   });
 }
 
-export function createJob(
-  token: string,
-  input: {
-    title: string;
-    description?: string;
-    location?: string;
-    employmentType?: string;
-    companyId: string;
-    competitionId: string;
-    idempotencyKey?: string;
-  },
-) {
-  return apiFetch<{
-    id: string;
-    title: string;
-    status: string;
-    publishedAt: string | null;
-  }>('/jobs', {
-    method: 'POST',
-    token,
-    body: JSON.stringify(input),
-  });
-}
-
-export function publishJob(token: string, jobId: string) {
-  return apiFetch<{
-    job: { id: string; title: string; status: string; publishedAt: string | null };
-    scored: boolean;
-    my_score: number | null;
-    competition_id: string | null;
-  }>(`/jobs/${jobId}/publish`, {
-    method: 'POST',
-    token,
-  });
-}
-
 export function fetchScreenShareStatus(competitionId: string, token: string) {
   return apiFetch<{ configured: boolean }>(
     `/competitions/${competitionId}/screen-share`,

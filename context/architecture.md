@@ -25,20 +25,20 @@ Do not introduce TypeORM. Prisma 7 uses `prisma.config.ts`, the
 
 ## System Boundaries
 
-- `src/modules/live-challenge/` (or existing NestJS
-  module path) — competition domain, lifecycle, scoring,
-  leaderboard, timer, guards, gateway, processors
-- Existing Job module / service — create and publish jobs locally;
-  competition module orchestrates, does not duplicate. External job
-  servers call `POST /api/integrations/job-events` instead of `/jobs`.
+- `src/modules/live-challenge/` — competition domain,
+  lifecycle, scoring, leaderboard, timer, guards, gateway,
+  external job-event ingest
+- External job server — creates/publishes jobs; calls
+  `POST /api/integrations/job-events` (HMAC) so this API
+  can score. There is no local `/api/jobs` module.
 - Existing User / Company / CompanyMembership — identity
-  and company resolution
+  and display names on leaderboard / roster
 - Existing auth / Passport / JWT / session — HTTP and
   WebSocket authentication
 - Existing notification / email infrastructure — scheduled,
   started, ended, finalized, winner
 - Next.js `app/competition/[id]/` (or existing router) —
-  participant UI
+  participant UI (score/rank/leaderboard; no job create)
 - Next.js `app/competition/[id]/live/` — observer / TV UI
 - Next.js `components/competition/` — live widgets
 - Next.js `lib/competition/` — API client, socket client,
@@ -48,7 +48,8 @@ Do not introduce TypeORM. Prisma 7 uses `prisma.config.ts`, the
   with `livekit-client`. Video never traverses Nest sockets.
 
 Next.js is the UI layer only. NestJS owns scoring, timer
-authority, authorization, and job-publish rules.
+authority, and authorization. Job CRUD lives on the
+external job server.
 
 ## CLI-first NestJS module
 
@@ -137,10 +138,10 @@ reconcilable against Jobs.
   NestJS strategy (JWT, cookie, Passport, etc.).
 - Resolve company through existing CompanyMembership.
   Do not duplicate membership logic.
-- **Participant**: view own competition, create/publish
-  competition jobs (local or via the external job server),
-  view permitted leaderboard. Cannot change score, rank, or
-  timing. External publishes are attributed through
+- **Participant**: view own competition, link
+  `externalUserId`, view score/rank/leaderboard. Cannot
+  change score, rank, or timing. Publishes happen on the
+  external job server and are attributed through
   `User.externalUserId`.
 - **External job server**: HMAC-signed ingest only. Cannot
   set score, rank, or timer. Must not use participant JWT.
@@ -148,8 +149,13 @@ reconcilable against Jobs.
   participant info, authorized screens. Cannot publish
   or mutate competition state.
 - **Competition admin**: create, schedule, register,
-  start, cancel, end, finalize, inspect audit, view
-  results.
+  start, cancel, end, finalize, disqualify, inspect audit,
+  view results.
+- Rosters are closed by default. `POST /competitions/:id/join`
+  admits only participants an admin registered unless the
+  competition sets `allowOpenJoin`. Public `/auth/register`
+  always creates an EMPLOYER; ADMIN comes only from
+  `POST /auth/admins`.
 - Next.js may hide unauthorized UI. Hiding UI is not
   authorization. NestJS guards and services remain the
   authority.
@@ -255,7 +261,13 @@ Next.js holds sockets only in Client Components.
     lived credentials and revokes rooms/publishers. Media
     never flows through Nest WebSockets. Sharing never
     affects score.
-20. Observability: `/api/health/live` is process liveness;
+20. Rate limits are named buckets chosen per route with
+    `@RateLimit` (`default`, `auth`, `competition`) and
+    tracked per verified user id, falling back to IP.
+    Every limit is env-configurable so the high-frequency
+    publish path is never throttled for legitimate play.
+    Socket handshakes have their own per-address budget.
+21. Observability: `/api/health/live` is process liveness;
     `/api/health/ready` checks Postgres (required) and
     Redis (degraded if down). `/api/metrics` exposes
     in-process counters. Alert on publish failure rate,

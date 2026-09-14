@@ -138,6 +138,7 @@ function makeService(options?: {
     timer,
     validator,
     realtime,
+    { recordPublish: vi.fn() } as never,
   );
 
   return { service, prisma, scoring, realtime, tx, timer };

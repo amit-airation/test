@@ -79,6 +79,21 @@ describe('ExternalSignatureGuard', () => {
     ).toThrow(UnauthorizedException);
   });
 
+  it('returns 503 when webhook ingest is disabled', () => {
+    const config = {
+      get: (key: string, fallback?: number) => {
+        if (key === EXTERNAL_JOB_WEBHOOK.ENABLED_ENV) return 'false';
+        if (key === EXTERNAL_JOB_WEBHOOK.SECRET_ENV) return SECRET;
+        if (key === EXTERNAL_JOB_WEBHOOK.SKEW_ENV) return 300;
+        return fallback;
+      },
+    } as unknown as ConfigService;
+    const guard = new ExternalSignatureGuard(config);
+    expect(() =>
+      guard.canActivate(context({}, Buffer.from(BODY))),
+    ).toThrow(/disabled/);
+  });
+
   it('rejects an invalid signature', () => {
     const timestamp = String(Math.floor(Date.now() / 1000));
     const guard = makeGuard();

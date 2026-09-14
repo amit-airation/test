@@ -13,7 +13,7 @@ export function RecentPublications({ jobs }: RecentPublicationsProps) {
       <ul className="mt-4 space-y-3">
         {jobs.length === 0 ? (
           <li className="text-sm text-muted-text">
-            Publish a competition job to see it here.
+            Scores from the job server will appear here as they publish.
           </li>
         ) : (
           jobs.map((job) => (

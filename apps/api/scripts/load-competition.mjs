@@ -1,30 +1,29 @@
 /**
- * Phase 8 load scenario (details.md §54).
+ * Phase 8 load scenario — webhook scoring only.
  *
- * Simulates N participants publishing jobs concurrently plus O observer
+ * Simulates N participants scored via signed job-events plus O observer
  * WebSocket joins against a running API.
  *
  * Usage (API must already be running + migrated):
- *   node scripts/load-competition.mjs
- *   PARTICIPANTS=50 OBSERVERS=5 PUBLISHES_PER=2 node scripts/load-competition.mjs
- *
- * Env:
- *   API_URL   default http://localhost:3001/api
- *   WS_URL    default http://localhost:3001
- *   PARTICIPANTS  default 20 (use 100 for full §54 target)
- *   OBSERVERS     default 5
- *   PUBLISHES_PER default 2
+ *   EXTERNAL_JOB_WEBHOOK_SECRET=... ADMIN_EMAIL=... ADMIN_PASSWORD=... node scripts/load-competition.mjs
+ *   PARTICIPANTS=50 OBSERVERS=5 PUBLISHES_PER=2 ...
  */
+import { createHmac, randomUUID } from 'node:crypto';
 import { io } from 'socket.io-client';
 
 const API = process.env.API_URL ?? 'http://localhost:3001/api';
 const WS = process.env.WS_URL ?? 'http://localhost:3001';
+const WEBHOOK_SECRET = process.env.EXTERNAL_JOB_WEBHOOK_SECRET;
 const PARTICIPANTS = Number(process.env.PARTICIPANTS ?? 20);
 const OBSERVERS = Number(process.env.OBSERVERS ?? 5);
 const PUBLISHES_PER = Number(process.env.PUBLISHES_PER ?? 2);
 const suffix = String(Date.now());
 
 const httpLatencies = [];
+
+if (!WEBHOOK_SECRET) {
+  throw new Error('Set EXTERNAL_JOB_WEBHOOK_SECRET for load-competition');
+}
 
 async function json(method, path, body, token, headers = {}) {
   const started = performance.now();
@@ -35,11 +34,33 @@ async function json(method, path, body, token, headers = {}) {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...headers,
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
   httpLatencies.push(performance.now() - started);
   if (!res.ok) throw new Error(`${method} ${path}: ${text}`);
+  return text ? JSON.parse(text) : null;
+}
+
+async function postJobEvent(payload) {
+  const body = JSON.stringify(payload);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = createHmac('sha256', WEBHOOK_SECRET)
+    .update(`${timestamp}.${body}`)
+    .digest('hex');
+  const started = performance.now();
+  const res = await fetch(`${API}/integrations/job-events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-hirance-timestamp': timestamp,
+      'x-hirance-signature': signature,
+    },
+    body,
+  });
+  const text = await res.text();
+  httpLatencies.push(performance.now() - started);
+  if (!res.ok) throw new Error(`webhook: ${text}`);
   return text ? JSON.parse(text) : null;
 }
 
@@ -123,6 +144,7 @@ await json(
 
 const employers = [];
 for (let i = 0; i < PARTICIPANTS; i += 1) {
+  const externalUserId = `ext-load-${suffix}-${i}`;
   const user = await json('POST', '/auth/register', {
     email: `load-p${i}-${suffix}@hirance.test`,
     password: 'password123',
@@ -137,10 +159,10 @@ for (let i = 0; i < PARTICIPANTS; i += 1) {
   await json(
     'POST',
     `/competitions/${competition.id}/join`,
-    { companyId: company.id },
+    { companyId: company.id, externalUserId },
     user.access_token,
   );
-  employers.push({ user, company });
+  employers.push({ user, company, externalUserId });
 }
 
 const observerLatencies = [];
@@ -171,27 +193,23 @@ observers[0]?.on('SCORE_UPDATED', () => {
 });
 
 await Promise.all(
-  employers.flatMap(({ user: employer, company }, idx) =>
+  employers.flatMap(({ externalUserId }, idx) =>
     Array.from({ length: PUBLISHES_PER }, (_, j) =>
       (async () => {
         const started = performance.now();
-        const job = await json(
-          'POST',
-          '/jobs',
-          {
+        await postJobEvent({
+          event_id: randomUUID(),
+          event: 'JOB_PUBLISHED',
+          external_user_id: externalUserId,
+          external_job_id: `job-load-${suffix}-${idx}-${j}`,
+          published_at: new Date().toISOString(),
+          job: {
             title: `Job ${idx}-${j}`,
-            companyId: company.id,
-            competitionId: competition.id,
-            idempotencyKey: `load-${suffix}-${idx}-${j}`,
+            description: 'Load-test competition job from external server',
+            location: 'Remote',
+            employment_type: 'FULL_TIME',
           },
-          employer.access_token,
-        );
-        await json(
-          'POST',
-          `/jobs/${job.id}/publish`,
-          {},
-          employer.access_token,
-        );
+        });
         publishLatencies.push(performance.now() - started);
       })(),
     ),
@@ -209,7 +227,7 @@ console.log(
     {
       competition_id: competition.id,
       http: summarize('all_http', httpLatencies),
-      publish_cycle: summarize('create_and_publish', publishLatencies),
+      webhook_publish: summarize('job_events_webhook', publishLatencies),
       observer_join: summarize('observer_ws_join', observerLatencies),
       score_events_seen: scoreEvents.length,
       metrics_snapshot: {

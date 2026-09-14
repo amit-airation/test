@@ -20,14 +20,16 @@ function context() {
 }
 
 function txStub(options: { duplicateJob?: boolean }) {
-  const duplicate = Object.assign(new Error('duplicate'), { code: 'P2002' });
   return {
     competitionJobScore: {
-      create: vi.fn(() =>
-        options.duplicateJob
-          ? Promise.reject(duplicate)
-          : Promise.resolve({ id: 'ledger-1' }),
+      findUnique: vi.fn(() =>
+        Promise.resolve(
+          options.duplicateJob
+            ? { id: 'ledger-1', jobId: 'job-1' }
+            : null,
+        ),
       ),
+      create: vi.fn(() => Promise.resolve({ id: 'ledger-1' })),
     },
     competitionParticipant: {
       update: vi.fn(() =>

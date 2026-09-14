@@ -32,6 +32,7 @@ export function AuthGate({ competitionId, onReady }: AuthGateProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('password123');
   const [name, setName] = useState('');
+  const [externalUserId, setExternalUserId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,6 +42,8 @@ export function AuthGate({ competitionId, onReady }: AuthGateProps) {
     const user = getSessionUser();
     if (!token || !user) return;
 
+    // Session restore cannot prompt for externalUserId; join with company only.
+    // Users who need to link can sign out and use the form field.
     void (async () => {
       try {
         const companyId = await ensureCompany(token, user.name);
@@ -79,6 +82,7 @@ export function AuthGate({ competitionId, onReady }: AuthGateProps) {
           competitionId,
           result.access_token,
           companyId ?? undefined,
+          externalUserId.trim() || undefined,
         );
       } catch (err) {
         setRosterError(
@@ -135,7 +139,8 @@ export function AuthGate({ competitionId, onReady }: AuthGateProps) {
           Join competition
         </h1>
         <p className="mt-2 text-sm text-muted-text">
-          Sign in to sync your live score, timer, and job publishing.
+          Sign in to sync your live score, timer, and leaderboard. Jobs are
+          published on the Hirance job server.
         </p>
         <form onSubmit={submit} className="mt-6 space-y-4">
           {mode === 'register' ? (
@@ -164,6 +169,16 @@ export function AuthGate({ competitionId, onReady }: AuthGateProps) {
             placeholder="Password"
             className="w-full rounded-xl border border-border bg-background px-3 py-2"
           />
+          <input
+            value={externalUserId}
+            onChange={(e) => setExternalUserId(e.target.value)}
+            placeholder="Job-server user id (externalUserId)"
+            className="w-full rounded-xl border border-border bg-background px-3 py-2"
+            autoComplete="off"
+          />
+          <p className="text-xs text-muted-text">
+            Required for score attribution when the job server posts webhooks.
+          </p>
           {error ? (
             <p className="text-sm text-live-danger" role="alert">
               {error}

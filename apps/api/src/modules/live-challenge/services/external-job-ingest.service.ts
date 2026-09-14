@@ -106,6 +106,7 @@ export class ExternalJobIngestService {
           },
         },
       });
+      this.metrics.recordPublish(false);
       return {
         scored: false,
         my_score: live.finalScore,
@@ -161,6 +162,7 @@ export class ExternalJobIngestService {
       scored: result.score.scored,
       final_score: result.score.finalScore,
     });
+    this.metrics.recordPublish(true);
 
     return {
       scored: result.score.scored,

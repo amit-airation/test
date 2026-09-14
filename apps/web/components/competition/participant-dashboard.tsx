@@ -4,7 +4,6 @@ import { useCallback, useState } from 'react';
 import { AuthGate } from '@/components/competition/auth-gate';
 import { ConnectionBanner } from '@/components/competition/connection-banner';
 import { Countdown } from '@/components/competition/countdown';
-import { JobCreateEntry } from '@/components/competition/job-create-entry';
 import { Leaderboard } from '@/components/competition/leaderboard';
 import { RankBadge } from '@/components/competition/rank-badge';
 import { RecentPublications } from '@/components/competition/recent-publications';
@@ -47,7 +46,6 @@ export function ParticipantDashboard({
     return <AuthGate competitionId={competitionId} onReady={onReady} />;
   }
 
-  const canPublish = live.status === 'LIVE';
   const ownScoreEvent =
     live.lastScoreEvent?.participant.user_id === user.id
       ? live.lastScoreEvent
@@ -92,21 +90,27 @@ export function ParticipantDashboard({
 
         <Countdown timer={live.timer} status={live.status} />
 
+        <section className="rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-muted-text">
+          Publish jobs on the Hirance job server. This screen only shows your
+          live score, rank, and leaderboard.
+        </section>
+
         {live.externalUserId === undefined ? null : live.externalUserId ? (
           <p className="text-sm text-muted-text">
             Linked job-server id:{' '}
             <span className="font-medium text-foreground">
               {live.externalUserId}
             </span>
-            . Jobs published in the Hirance app also count.
+            . Successful publishes there update your score here.
           </p>
         ) : (
           <p
             className="rounded-xl border border-live-danger/40 bg-live-danger/10 px-4 py-3 text-sm text-live-danger"
             role="alert"
           >
-            No job-server user id is linked. Jobs you publish on the external
-            app will not count until an admin links your external user id.
+            No job-server user id is linked. Sign out and join again with your
+            external user id, or ask an admin to link it — otherwise publishes
+            will not count.
           </p>
         )}
 
@@ -119,17 +123,6 @@ export function ParticipantDashboard({
           <RankBadge rank={live.myRank} />
         </div>
 
-        <JobCreateEntry
-          token={token}
-          competitionId={competitionId}
-          companyId={live.companyId}
-          disabled={!canPublish}
-          onPublished={(job) => {
-            live.prependRecentJob(job);
-            if (job.myScore != null) live.setMyScore(job.myScore);
-          }}
-        />
-
         <ScreenShareControls
           competitionId={competitionId}
           token={token}
@@ -137,12 +130,6 @@ export function ParticipantDashboard({
           participantStatus={live.participantStatus}
           socket={live.socket.current}
         />
-
-        {!canPublish ? (
-          <p className="text-center text-sm text-muted-text">
-            Job publishing is available while the competition is LIVE.
-          </p>
-        ) : null}
 
         <div className="grid gap-4 lg:grid-cols-2">
           <Leaderboard

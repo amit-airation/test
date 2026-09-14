@@ -42,41 +42,37 @@ export class CompetitionScoringService {
     jobId: string,
     extraMetadata: Record<string, unknown> = {},
   ): Promise<ScorePublishResult> {
-    try {
-      await tx.competitionJobScore.create({
-        data: {
-          competitionId: ctx.competition.id,
-          participantId: ctx.participant.id,
-          jobId,
-        },
+    // Check first — catching P2002 inside a Postgres interactive transaction
+    // aborts the TX (25P02) and blocks further queries on Prisma 7 + pg.
+    const existingLedger = await tx.competitionJobScore.findUnique({
+      where: { jobId },
+    });
+    if (existingLedger) {
+      const participant = await tx.competitionParticipant.findUniqueOrThrow({
+        where: { id: ctx.participant.id },
       });
-    } catch (error) {
-      if (
-        typeof error === 'object' &&
-        error !== null &&
-        'code' in error &&
-        (error as { code: string }).code === 'P2002'
-      ) {
-        // Retry / already scored this job — no second increment.
-        const participant = await tx.competitionParticipant.findUniqueOrThrow({
-          where: { id: ctx.participant.id },
-        });
-        this.logger.log({
-          event: 'score_idempotent_skip',
-          competition_id: ctx.competition.id,
-          participant_id: ctx.participant.id,
-          job_id: jobId,
-          final_score: participant.finalScore,
-        });
-        return {
-          scored: false,
-          finalScore: participant.finalScore,
-          scoreReachedAt: participant.scoreReachedAt,
-          participantId: participant.id,
-        };
-      }
-      throw error;
+      this.logger.log({
+        event: 'score_idempotent_skip',
+        competition_id: ctx.competition.id,
+        participant_id: ctx.participant.id,
+        job_id: jobId,
+        final_score: participant.finalScore,
+      });
+      return {
+        scored: false,
+        finalScore: participant.finalScore,
+        scoreReachedAt: participant.scoreReachedAt,
+        participantId: participant.id,
+      };
     }
+
+    await tx.competitionJobScore.create({
+      data: {
+        competitionId: ctx.competition.id,
+        participantId: ctx.participant.id,
+        jobId,
+      },
+    });
 
     const reachedAt = ctx.now;
     const participant = await tx.competitionParticipant.update({

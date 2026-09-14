@@ -21,23 +21,24 @@ and incomplete jobs never increase the score.
    jobs, with concurrency-safe and idempotent scoring.
 3. Push live score, rank, timer, and leaderboard updates
    to participant and observer screens.
-4. Reuse existing Hirance Job, User, Company, auth, and
-   notification systems instead of duplicating them.
+4. Keep User and Company names for display on participant
+   and observer screens. Job create/publish lives on the
+   external Hirance job server; this API scores via webhook.
 
 ## Core User Flow
 
 1. Admin creates and schedules a competition.
 2. HR / founder / employer participants register or are
-   added and join.
+   added and join (optionally linking `externalUserId`).
 3. Competition starts. NestJS sets `actual_start_at` and
    `end_at` and broadcasts `COMPETITION_STARTED`.
 4. All Next.js clients receive a synchronized timer from
    server time.
-5. A participant creates a job through the existing job
-   creation UI and publishes it through the existing
-   NestJS Job API with competition context.
-6. After the publish transaction commits, the score
-   increments by 1 and observers see a live update.
+5. A participant publishes a job on the external job server.
+6. That server POSTs a signed event to
+   `/api/integrations/job-events`. After the ingest
+   transaction commits, the score increments by 1 and
+   observers see a live update.
 7. Participants may disconnect and reconnect without
    resetting timer or score.
 8. At `end_at`, new publishes are rejected. Final scores,

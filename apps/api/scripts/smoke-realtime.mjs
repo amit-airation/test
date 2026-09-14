@@ -1,34 +1,86 @@
+/**
+ * Smoke: competition lifecycle + webhook score → Socket.IO events.
+ *
+ * Requires EXTERNAL_JOB_WEBHOOK_SECRET and ADMIN_EMAIL/ADMIN_PASSWORD
+ * (or ADMIN_BOOTSTRAP_TOKEN for first admin).
+ */
+import { createHmac, randomUUID } from 'node:crypto';
 import { io } from 'socket.io-client';
 
-const API = process.env.API_URL ?? 'http://localhost:3006/api';
-const WS = process.env.WS_URL ?? 'http://localhost:3006';
+const API = process.env.API_URL ?? 'http://localhost:3001/api';
+const WS = process.env.WS_URL ?? 'http://localhost:3001';
+const WEBHOOK_SECRET = process.env.EXTERNAL_JOB_WEBHOOK_SECRET;
 const suffix = String(Math.floor(Math.random() * 1_000_000));
+const externalUserId = `ext-smoke-${suffix}`;
 
-async function json(method, path, body, token) {
+if (!WEBHOOK_SECRET) {
+  throw new Error('Set EXTERNAL_JOB_WEBHOOK_SECRET for smoke-realtime');
+}
+
+async function json(method, path, body, token, headers = {}) {
   const res = await fetch(`${API}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...headers,
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`${method} ${path}: ${text}`);
   return text ? JSON.parse(text) : null;
 }
 
-const admin = await json('POST', '/auth/register', {
-  email: `admin${suffix}@hirance.test`,
-  password: 'password123',
-  name: 'Admin',
-  role: 'ADMIN',
-});
+async function provisionAdmin() {
+  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+    return json('POST', '/auth/login', {
+      email: process.env.ADMIN_EMAIL,
+      password: process.env.ADMIN_PASSWORD,
+    });
+  }
+  const bootstrap = process.env.ADMIN_BOOTSTRAP_TOKEN;
+  if (!bootstrap) {
+    throw new Error('Set ADMIN_EMAIL/ADMIN_PASSWORD or ADMIN_BOOTSTRAP_TOKEN');
+  }
+  return json(
+    'POST',
+    '/auth/admins',
+    {
+      email: `smoke-admin-${suffix}@hirance.test`,
+      password: 'password123',
+      name: 'Smoke Admin',
+    },
+    undefined,
+    { 'x-admin-bootstrap-token': bootstrap },
+  );
+}
+
+async function postJobEvent(payload) {
+  const body = JSON.stringify(payload);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = createHmac('sha256', WEBHOOK_SECRET)
+    .update(`${timestamp}.${body}`)
+    .digest('hex');
+  const res = await fetch(`${API}/integrations/job-events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-hirance-timestamp': timestamp,
+      'x-hirance-signature': signature,
+    },
+    body,
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`webhook: ${text}`);
+  return text ? JSON.parse(text) : null;
+}
+
+const admin = await provisionAdmin();
 const employer = await json('POST', '/auth/register', {
   email: `hr${suffix}@hirance.test`,
   password: 'password123',
   name: 'HR User',
-  role: 'EMPLOYER',
 });
 
 const company = await json(
@@ -41,7 +93,7 @@ const company = await json(
 const comp = await json(
   'POST',
   '/competitions',
-  { name: `P3 ${suffix}`, durationSeconds: 300 },
+  { name: `P3 ${suffix}`, durationSeconds: 300, allowOpenJoin: true },
   admin.access_token,
 );
 
@@ -54,14 +106,8 @@ await json(
 );
 await json(
   'POST',
-  `/competitions/${comp.id}/register`,
-  { userId: employer.user.id, companyId: company.id },
-  admin.access_token,
-);
-await json(
-  'POST',
   `/competitions/${comp.id}/join`,
-  { companyId: company.id },
+  { companyId: company.id, externalUserId },
   employer.access_token,
 );
 
@@ -94,20 +140,22 @@ for (const event of [
   });
 }
 
-await json(`POST`, `/competitions/${comp.id}/start`, null, admin.access_token);
+await json('POST', `/competitions/${comp.id}/start`, {}, admin.access_token);
 
-const job = await json(
-  'POST',
-  '/jobs',
-  {
+const ingest = await postJobEvent({
+  event_id: randomUUID(),
+  event: 'JOB_PUBLISHED',
+  external_user_id: externalUserId,
+  external_job_id: `job-smoke-${suffix}`,
+  published_at: new Date().toISOString(),
+  job: {
     title: 'Realtime Engineer',
     description: 'Ship Socket.IO competition events',
-    companyId: company.id,
-    competitionId: comp.id,
+    location: 'Remote',
+    employment_type: 'FULL_TIME',
   },
-  employer.access_token,
-);
-await json('POST', `/jobs/${job.id}/publish`, null, employer.access_token);
+});
+console.log('INGEST', JSON.stringify(ingest));
 
 await new Promise((r) => setTimeout(r, 1500));
 
@@ -115,6 +163,7 @@ console.log(
   JSON.stringify({
     joinOk: joinAck?.ok === true,
     joinStatus: joinAck?.status,
+    scored: ingest?.scored === true,
     seen: [...new Set(seen)],
     gotStarted: seen.includes('COMPETITION_STARTED'),
     gotScore: seen.includes('SCORE_UPDATED'),

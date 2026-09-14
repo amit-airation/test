@@ -328,7 +328,6 @@ components/competition/
     countdown.tsx
     score-card.tsx
     leaderboard.tsx
-    job-create-entry.tsx
     observer-dashboard.tsx
 lib/competition/
     api.ts
@@ -338,9 +337,8 @@ lib/competition/
 
 Follow the existing Next.js routing convention (`app/` or `pages/`).
 
-Do not duplicate Job business logic inside the competition module.
-
-The competition module should orchestrate existing Job functionality through the existing NestJS Job service.
+Do not implement job create/publish on this server. Mirror
+external publishes into `Job` only for the scoring ledger.
 
 ---
 
@@ -682,38 +680,31 @@ Use database/server timestamps consistently.
 
 # 15. Job publish integration
 
-Do not create a second independent "competition publish" implementation.
+This competition server does **not** create or publish jobs.
 
-Reuse the existing NestJS Job publish service.
-
-The flow should conceptually be:
+Job creation lives on the separate Hirance job server. That server notifies
+this API so scores and leaderboards update.
 
 ```text
-POST /jobs/
+External job server publishes a job
       ↓
-create job
+POST /api/integrations/job-events  (HMAC)
       ↓
-normal validation
+mirror Job (source = EXTERNAL)
       ↓
-competition validation
+transactional score ledger
       ↓
-publish
-      ↓
-transaction succeeds
-      ↓
-competition score event
-      ↓
-real-time broadcast
+real-time SCORE_UPDATED / LEADERBOARD_UPDATED
 ```
 
-The score should increase only after the publish operation is successfully committed.
+The score increases only after the ingest transaction commits.
 
 ---
 
 # 15.1 External job server ingestion
 
-Job creation may happen on a separate Hirance job server. This competition
-backend still owns scoring, the timer, and the leaderboard.
+Job creation happens on a separate Hirance job server. This competition
+backend owns scoring, the timer, and the leaderboard.
 
 Identity:
 
@@ -773,7 +764,7 @@ Resolution:
 3. Eligibility uses **this backend's receive time** against `end_at`.
    `published_at` from the job server is audit-only.
 4. Mirror the job into the existing `Job` table (`source = EXTERNAL`).
-5. Increment score through the same transactional ledger as local publish.
+5. Increment score through the transactional competition ledger.
 6. Broadcast `SCORE_UPDATED` / `LEADERBOARD_UPDATED` only after commit.
 
 Idempotency: `Job.externalJobId` is unique, and `CompetitionJobScore.jobId`
@@ -797,8 +788,7 @@ Response:
 `reason` values include `unknown_external_user`, `no_live_competition`,
 `already_scored`, `competition_ended`, `competition_finalized`.
 
-The in-app `POST /jobs` create/publish path remains available for demos
-and tests. Both origins share the same scoring path.
+There is no local `POST /jobs` create/publish path on this server.
 
 ---
 
@@ -1537,7 +1527,7 @@ Prefer integrating competition context into the existing Job APIs rather than cr
 
 When jobs are created on the external job server, that server calls
 `POST /api/integrations/job-events` with the participant's
-`external_user_id` instead of posting to `/jobs`. See section 15.1.
+`external_user_id` on join/register. See section 15.1.
 
 For example:
 
