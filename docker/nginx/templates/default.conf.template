@@ -1,0 +1,23 @@
+# Shared upstreams + HTTP ACME / HTTPS redirect for UI + API hosts.
+upstream api_upstream {
+  server ${API_UPSTREAM};
+  keepalive 32;
+}
+
+upstream web_upstream {
+  server ${WEB_UPSTREAM};
+  keepalive 32;
+}
+
+server {
+  listen 80;
+  server_name ${UI_SERVER_NAME} ${API_SERVER_NAME};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}

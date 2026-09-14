@@ -1,0 +1,5 @@
+# Ignore local TLS material (mount at deploy time).
+*.pem
+*.key
+*.crt
+certs/

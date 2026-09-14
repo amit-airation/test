@@ -9,6 +9,14 @@
     "dev:web": "npm run dev -w web",
     "build": "npm run build -w api && npm run build -w web",
     "prisma:migrate": "npm run prisma:migrate -w api",
-    "prisma:generate": "npm run prisma:generate -w api"
+    "prisma:generate": "npm run prisma:generate -w api",
+    "ssl:cert": "bash ./scripts/generate-ssl-cert.sh",
+    "ssl:cert:webroot": "bash ./scripts/generate-ssl-cert.sh --webroot",
+    "ssl:cert:staging": "bash ./scripts/generate-ssl-cert.sh --staging",
+    "ssl:renew": "bash ./scripts/renew-ssl-cert.sh",
+    "edge:up": "bash ./scripts/deploy-edge.sh",
+    "edge:up:cert": "bash ./scripts/deploy-edge.sh --cert",
+    "edge:down": "bash ./scripts/deploy-edge.sh --down",
+    "ec2:bootstrap": "bash ./scripts/ec2-bootstrap.sh"
   }
 }

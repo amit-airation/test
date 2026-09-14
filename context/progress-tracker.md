@@ -17,6 +17,11 @@ change.
 
 ## Completed
 
+- Docker nginx edge for EC2 Ubuntu:
+  UI `test.amitverma01.dev`, API `api.test.amitverma01.dev`,
+  scripts `ec2-bootstrap` / `ssl:cert` / `edge:up` / `ssl:renew`,
+  Let's Encrypt SAN (`amitz.airation@gmail.com`). External job
+  server `api.hirance.com` webhooks into the API host.
 - Phase 0 — Monorepo init.
 - Phase 1 — Competition domain + JWT auth + lifecycle.
 - Phase 2 — Atomic score ledger (now webhook-fed only).
@@ -115,3 +120,16 @@ change.
   `EXTERNAL_JOB_WEBHOOK_SECRET=... ADMIN_EMAIL=... ADMIN_PASSWORD=... npm run load:competition -w api`
   `PARTICIPANTS=100` for the §54 target.
   `npm run load:ws-capacity -w api` for observer sockets.
+- Full local test walkthrough (webhooks + UI):
+  [`docs/LOCAL_TESTING.md`](../docs/LOCAL_TESTING.md).
+- Deployment, production env, and job-server integration:
+  [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md).
+- EC2 Ubuntu edge:
+  1. SG 22/80/443 + DNS for UI/API hosts → EIP
+  2. `sudo bash scripts/ec2-bootstrap.sh`
+  3. `npm run ssl:cert && npm run edge:up`
+  → https://test.amitverma01.dev ,
+  https://api.test.amitverma01.dev (DEPLOYMENT §6.7–6.8).
+  Job server `api.hirance.com` POSTs to
+  `/api/integrations/job-events` on the API host.
+  Renew: `npm run ssl:renew` (cron-friendly).

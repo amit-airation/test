@@ -11,6 +11,7 @@
 | Cache / bus  | Redis                                           | Presence, leaderboard cache, Socket.IO adapter    |
 | Workers      | BullMQ or existing NestJS queue                 | Finalization, notifications, cleanup, reconcile   |
 | Media        | WebRTC + LiveKit SFU                            | Screen share only — never scoring                 |
+| Edge         | Nginx (Docker)                                  | TLS for UI `test.amitverma01.dev` + API `api.test.amitverma01.dev` |
 
 Greenfield monorepo layout (Phase 0):
 
