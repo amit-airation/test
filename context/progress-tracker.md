@@ -17,11 +17,10 @@ change.
 
 ## Completed
 
-- Docker nginx + LiveKit edge for EC2 Ubuntu:
+- Docker full stack in one `docker-compose.yml` (postgres, redis,
+  livekit, api, web, nginx) for EC2:
   UI `test.amitverma01.dev`, API `api.test.amitverma01.dev`,
-  LiveKit `live.test.amitverma01.dev`, scripts
-  `ec2-bootstrap` / `ssl:cert` / `edge:up` / `ssl:renew`.
-  External job server `api.hirance.com` webhooks into the API host.
+  LiveKit `live.test.amitverma01.dev`. `docker compose up -d --build`.
 - Phase 0 — Monorepo init.
 - Phase 1 — Competition domain + JWT auth + lifecycle.
 - Phase 2 — Atomic score ledger (now webhook-fed only).
@@ -124,13 +123,4 @@ change.
   [`docs/LOCAL_TESTING.md`](../docs/LOCAL_TESTING.md).
 - Deployment, production env, and job-server integration:
   [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md).
-- EC2 Ubuntu edge (with screen share):
-  1. SG 22/80/443/7881 + UDP 7882; DNS UI/API/LiveKit → EIP
-  2. `sudo bash scripts/ec2-bootstrap.sh`
-  3. `npm run ssl:cert && npm run edge:up`
-  → https://test.amitverma01.dev ,
-  https://api.test.amitverma01.dev ,
-  wss://live.test.amitverma01.dev (DEPLOYMENT §6.7–6.8).
-  Job server `api.hirance.com` POSTs to
-  `/api/integrations/job-events` on the API host.
-  Renew: `npm run ssl:renew` (cron-friendly).
+- EC2: `docker compose up -d --build` then `npm run ssl:cert:webroot`.

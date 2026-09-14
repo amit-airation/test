@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
-# Start / refresh the production nginx edge on EC2 Ubuntu.
+# Build and start the full stack (postgres, redis, livekit, api, web, nginx).
 #
 # Usage:
-#   ./scripts/deploy-edge.sh           # build + up
-#   ./scripts/deploy-edge.sh --cert    # issue/renew certs first, then up
-#   ./scripts/deploy-edge.sh --down    # stop the edge
+#   ./scripts/deploy-edge.sh           # docker compose up -d --build
+#   ./scripts/deploy-edge.sh --cert    # up, then Let's Encrypt webroot + reload
+#   ./scripts/deploy-edge.sh --down
 #   npm run edge:up
-#
-# Expects API on host :3001 and web on host :3000 unless API_UPSTREAM /
-# WEB_UPSTREAM are set. Certs must exist in docker/nginx/certs/ (or pass --cert).
 
 set -euo pipefail
 
@@ -23,7 +20,7 @@ while [[ $# -gt 0 ]]; do
     --cert) WITH_CERT=1; shift ;;
     --down) DOWN=1; shift ;;
     -h|--help)
-      sed -n '2,14p' "$0"
+      sed -n '2,12p' "$0"
       exit 0
       ;;
     *)
@@ -43,42 +40,37 @@ if ! docker info >/dev/null 2>&1; then
   fi
 fi
 
-COMPOSE=("${DOCKER[@]}" compose -f docker-compose.prod.yml)
+COMPOSE=("${DOCKER[@]}" compose)
 
 if [[ "${DOWN}" -eq 1 ]]; then
   "${COMPOSE[@]}" down
-  echo "Edge stopped."
+  echo "Stack stopped."
   exit 0
-fi
-
-if [[ "${WITH_CERT}" -eq 1 ]]; then
-  bash "${ROOT_DIR}/scripts/generate-ssl-cert.sh"
-fi
-
-CERT_FULL="${ROOT_DIR}/docker/nginx/certs/fullchain.pem"
-CERT_KEY="${ROOT_DIR}/docker/nginx/certs/privkey.pem"
-if [[ ! -f "${CERT_FULL}" || ! -f "${CERT_KEY}" ]]; then
-  echo "Missing TLS material:" >&2
-  echo "  ${CERT_FULL}" >&2
-  echo "  ${CERT_KEY}" >&2
-  echo "Run: npm run ssl:cert   (or ./scripts/deploy-edge.sh --cert)" >&2
-  exit 1
 fi
 
 export UI_SERVER_NAME="${UI_SERVER_NAME:-test.amitverma01.dev}"
 export API_SERVER_NAME="${API_SERVER_NAME:-api.test.amitverma01.dev}"
 export LIVEKIT_SERVER_NAME="${LIVEKIT_SERVER_NAME:-live.test.amitverma01.dev}"
-export API_UPSTREAM="${API_UPSTREAM:-host.docker.internal:3001}"
-export WEB_UPSTREAM="${WEB_UPSTREAM:-host.docker.internal:3000}"
-export LIVEKIT_UPSTREAM="${LIVEKIT_UPSTREAM:-livekit:7880}"
 
 "${COMPOSE[@]}" up -d --build
 
+if [[ "${WITH_CERT}" -eq 1 ]]; then
+  echo "Waiting for nginx, then issuing Let's Encrypt certs (webroot)..."
+  for i in $(seq 1 30); do
+    if "${DOCKER[@]}" ps --format '{{.Names}} {{.Status}}' | grep -q 'hirance-nginx.*Up'; then
+      break
+    fi
+    sleep 2
+  done
+  bash "${ROOT_DIR}/scripts/generate-ssl-cert.sh" --webroot
+  "${DOCKER[@]}" exec hirance-nginx nginx -s reload || true
+fi
+
 echo
-echo "Edge is up:"
+echo "Stack is up:"
 echo "  UI      https://${UI_SERVER_NAME}"
 echo "  API     https://${API_SERVER_NAME}/api/health/live"
 echo "  WS      https://${API_SERVER_NAME}  (Socket.IO /socket.io/)"
-echo "  LiveKit wss://${LIVEKIT_SERVER_NAME}  (screen share; open SG TCP 7881 + UDP 7882)"
+echo "  LiveKit wss://${LIVEKIT_SERVER_NAME}  (open SG TCP 7881 + UDP 7882)"
 echo
-"${DOCKER[@]}" ps --filter name=hirance-nginx --filter name=hirance-livekit
+"${DOCKER[@]}" compose ps

@@ -1,3 +1,15 @@
+# One command for the full stack (EC2 staging / local Docker).
+#
+#   npm run ssl:cert:webroot   # after DNS points here (or first-time standalone)
+#   docker compose up -d --build
+#
+#   UI      https://test.amitverma01.dev
+#   API     https://api.test.amitverma01.dev
+#   LiveKit wss://live.test.amitverma01.dev
+#
+# Job server api.hirance.com →
+#   POST https://api.test.amitverma01.dev/api/integrations/job-events
+
 services:
   postgres:
     image: postgres:16
@@ -7,8 +19,6 @@ services:
       POSTGRES_USER: hirance
       POSTGRES_PASSWORD: hirance
       POSTGRES_DB: hirance
-    ports:
-      - "5432:5432"
     volumes:
       - hirance_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -21,8 +31,6 @@ services:
     image: redis:7
     container_name: hirance-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     volumes:
       - hirance_redis_data:/data
     healthcheck:
@@ -31,23 +39,98 @@ services:
       timeout: 5s
       retries: 10
 
-  # Dev-only SFU for Phase 7 screen sharing. Uses LiveKit --dev keys
-  # (devkey/secret). Never use those keys in production.
   livekit:
     image: livekit/livekit-server:v1.8.4
     container_name: hirance-livekit
     restart: unless-stopped
-    command: --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./docker/livekit/livekit.staging.yaml:/etc/livekit.yaml:ro
     ports:
-      - "7880:7880"
       - "7881:7881"
       - "7882:7882/udp"
 
-  # Reverse proxy — UI / API / LiveKit hosts (profile nginx).
-  # Staging SFU with strong keys: docker compose -f docker-compose.prod.yml up -d livekit
-  # Local --dev SFU only: docker compose up -d livekit
+  certs:
+    image: alpine:3.20
+    container_name: hirance-certs
+    volumes:
+      - ./docker/nginx/certs:/certs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        apk add --no-cache openssl >/dev/null
+        if [ ! -f /certs/fullchain.pem ] || [ ! -f /certs/privkey.pem ]; then
+          echo "Generating temporary self-signed cert (replace with: npm run ssl:cert:webroot)"
+          openssl req -x509 -nodes -days 7 -newkey rsa:2048 \
+            -keyout /certs/privkey.pem \
+            -out /certs/fullchain.pem \
+            -subj "/CN=test.amitverma01.dev"
+        fi
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: hirance-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      API_PORT: "3001"
+      DATABASE_URL: postgresql://hirance:hirance@postgres:5432/hirance?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      LIVEKIT_URL: http://livekit:7880
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-wss://live.test.amitverma01.dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.test.amitverma01.dev/api}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-https://api.test.amitverma01.dev}
+    container_name: hirance-web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   nginx:
-    profiles: ["nginx"]
     build:
       context: ./docker/nginx
     container_name: hirance-nginx
@@ -56,17 +139,24 @@ services:
       - "${NGINX_HTTP_PORT:-80}:80"
       - "${NGINX_HTTPS_PORT:-443}:443"
     environment:
-      API_UPSTREAM: ${API_UPSTREAM:-host.docker.internal:3001}
-      WEB_UPSTREAM: ${WEB_UPSTREAM:-host.docker.internal:3000}
-      LIVEKIT_UPSTREAM: ${LIVEKIT_UPSTREAM:-host.docker.internal:7880}
+      API_UPSTREAM: api:3001
+      WEB_UPSTREAM: web:3000
+      LIVEKIT_UPSTREAM: livekit:7880
       UI_SERVER_NAME: ${UI_SERVER_NAME:-test.amitverma01.dev}
       API_SERVER_NAME: ${API_SERVER_NAME:-api.test.amitverma01.dev}
       LIVEKIT_SERVER_NAME: ${LIVEKIT_SERVER_NAME:-live.test.amitverma01.dev}
     volumes:
       - ./docker/nginx/certs:/etc/nginx/certs:ro
       - ./docker/nginx/certbot/www:/var/www/certbot:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+      livekit:
+        condition: service_started
 
 volumes:
   hirance_postgres_data:

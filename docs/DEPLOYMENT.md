@@ -45,8 +45,8 @@ The competition monorepo is a **scoring / leaderboard / realtime** server.
 apps/api/     NestJS API (global prefix /api)
 apps/web/     Next.js participant + observer UI
 docker/nginx/        reverse-proxy image + templates
-docker-compose.yml   postgres, redis, livekit, nginx (profile)
-docker-compose.prod.yml   production nginx edge
+docker/livekit/      staging LiveKit SFU config
+docker-compose.yml   postgres, redis, livekit, api, web, nginx
 docs/LOCAL_TESTING.md
 docs/DEPLOYMENT.md   ← this file
 ```
@@ -323,24 +323,19 @@ Certs are written to:
 (Let’s Encrypt account data stays under `docker/nginx/certbot/` — not
 committed.)
 
-#### Start the edge
+#### Start the stack
 
 ```bash
-npm run edge:up          # requires certs already on disk
-npm run edge:up:cert     # issue/renew certs, then up
-npm run edge:down
+docker compose up -d --build
+# or: npm run up
+# TLS after DNS: npm run edge:up:cert
 ```
 
-Equivalent:
+Nginx proxies `api` / `web` / `livekit` on the Compose network. Temporary
+self-signed certs are created if `docker/nginx/certs/` is empty; replace
+with Let's Encrypt via `npm run ssl:cert:webroot`.
 
-```bash
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
-If API/web run as Compose services named `api` / `web` on a shared
-network, set `API_UPSTREAM=api:3001` and `WEB_UPSTREAM=web:3000`.
-
-Env vars substituted at container start (`envsubst`):
+Env vars substituted at nginx container start (`envsubst`):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -353,8 +348,8 @@ Env vars substituted at container start (`envsubst`):
 
 ### 6.8 Deploy on EC2 Ubuntu
 
-Assumes one Ubuntu EC2 instance (or similar) with Elastic IP, API on
-host `:3001`, web on host `:3000`, nginx + LiveKit in Docker.
+Assumes one Ubuntu EC2 instance with Elastic IP. Everything runs in
+`docker compose` (postgres, redis, livekit, api, web, nginx).
 
 1. **Security group** — inbound TCP `22` (your IP), `80`, `443`, `7881`;
    UDP `7882`.
@@ -367,14 +362,13 @@ sudo bash scripts/ec2-bootstrap.sh
 # log out/in so docker group applies
 ```
 
-4. **App env** — production `apps/api/.env` and `apps/web/.env.local`
-   (see repo `.env` staging template), including LiveKit:
+4. **App env** — repo-root `.env` (Compose `env_file` for the API).
+   `LIVEKIT_URL` is overridden in Compose to `http://livekit:7880`.
 
 ```env
 CORS_ORIGIN=https://test.amitverma01.dev
 NEXT_PUBLIC_API_URL=https://api.test.amitverma01.dev/api
 NEXT_PUBLIC_WS_URL=https://api.test.amitverma01.dev
-LIVEKIT_URL=http://127.0.0.1:7880
 LIVEKIT_PUBLIC_URL=wss://live.test.amitverma01.dev
 LIVEKIT_API_KEY=APIstaginghirance01
 LIVEKIT_API_SECRET=staging-livekit-api-secret-at-least-32-chars!!
@@ -382,32 +376,33 @@ LIVEKIT_API_SECRET=staging-livekit-api-secret-at-least-32-chars!!
 
 Keys must match [`docker/livekit/livekit.staging.yaml`](../docker/livekit/livekit.staging.yaml).
 
-5. **Start API + web** on the host (`npm run start:prod` / `npm run start`
-   under process manager), then:
+5. **Start everything:**
 
 ```bash
-npm run ssl:cert
-npm run edge:up
+docker compose up -d --build
+# Let's Encrypt (nginx must be up; uses ACME webroot on :80)
+npm run ssl:cert:webroot
+docker exec hirance-nginx nginx -s reload
 ```
 
-`edge:up` starts **nginx + LiveKit**. Or combined: `npm run edge:up:cert`.
+Or: `npm run edge:up:cert`.
 
 6. **TLS renew cron** (example, monthly):
 
 ```cron
-0 3 1 * * cd /home/ubuntu/compettion && npm run ssl:renew >> /var/log/hirance-ssl-renew.log 2>&1
+0 3 1 * * cd /home/ubuntu/test && npm run ssl:renew >> /var/log/hirance-ssl-renew.log 2>&1
 ```
 
 Scripts (bash, EC2-oriented):
 
 | Script / npm | Purpose |
 |--------------|---------|
-| `npm run ec2:bootstrap` | Install Docker + open ufw 80/443 |
-| `npm run ssl:cert` | Let's Encrypt SAN issue (standalone) |
+| `npm run ec2:bootstrap` | Install Docker + open ufw 80/443/7881 + UDP 7882 |
+| `npm run up` | `docker compose up -d --build` (full stack) |
+| `npm run ssl:cert:webroot` | Let's Encrypt SAN via ACME webroot |
 | `npm run ssl:renew` | Webroot renew + nginx reload |
-| `npm run edge:up` | `docker compose -f docker-compose.prod.yml up` |
-| `npm run edge:up:cert` | Cert then edge up |
-| `npm run edge:down` | Stop nginx edge |
+| `npm run edge:up:cert` | Full stack + cert + reload |
+| `npm run down` | Stop the stack |
 
 Windows note: `scripts/generate-ssl-cert.ps1` remains for local PowerShell;
 production npm scripts call the bash versions.

@@ -14,6 +14,8 @@
     "ssl:cert:webroot": "bash ./scripts/generate-ssl-cert.sh --webroot",
     "ssl:cert:staging": "bash ./scripts/generate-ssl-cert.sh --staging",
     "ssl:renew": "bash ./scripts/renew-ssl-cert.sh",
+    "up": "docker compose up -d --build",
+    "down": "docker compose down",
     "edge:up": "bash ./scripts/deploy-edge.sh",
     "edge:up:cert": "bash ./scripts/deploy-edge.sh --cert",
     "edge:down": "bash ./scripts/deploy-edge.sh --down",
