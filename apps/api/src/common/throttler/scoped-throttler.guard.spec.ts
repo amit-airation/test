@@ -1,0 +1,122 @@
+import { Reflector } from '@nestjs/core';
+import { ThrottlerGuard } from '@nestjs/throttler';
+import type { ExecutionContext } from '@nestjs/common';
+import { RATE_LIMIT_POLICIES } from './rate-limit.policies.js';
+import { ScopedThrottlerGuard } from './scoped-throttler.guard.js';
+
+const SECRET = 's'.repeat(40);
+
+/** Exposes the protected hooks under test without changing behaviour. */
+class TestGuard extends ScopedThrottlerGuard {
+  callHandleRequest(request: unknown) {
+    return this.handleRequest(request as never);
+  }
+
+  callGetTracker(req: Record<string, unknown>) {
+    return this.getTracker(req);
+  }
+}
+
+function build(options?: { policy?: string; verifiedSub?: string }) {
+  const reflector = new Reflector();
+  vi.spyOn(reflector, 'getAllAndOverride').mockReturnValue(
+    options?.policy as never,
+  );
+  const jwt = {
+    verify: vi.fn(() => {
+      if (!options?.verifiedSub) {
+        throw new Error('invalid token');
+      }
+      return { sub: options.verifiedSub };
+    }),
+  };
+  const config = {
+    get: (key: string) => (key === 'JWT_SECRET' ? SECRET : undefined),
+  };
+  return new TestGuard(
+    { throttlers: [] } as never,
+    {} as never,
+    reflector,
+    jwt as never,
+    config as never,
+  );
+}
+
+const context = {
+  getHandler: () => () => undefined,
+  getClass: () => class {},
+} as unknown as ExecutionContext;
+
+describe('ScopedThrottlerGuard policy selection', () => {
+  let enforced: string[];
+
+  beforeEach(() => {
+    enforced = [];
+    vi.spyOn(
+      ThrottlerGuard.prototype as unknown as {
+        handleRequest: (request: { throttler: { name: string } }) => unknown;
+      },
+      'handleRequest',
+    ).mockImplementation(async (request) => {
+      enforced.push(request.throttler.name);
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function runAllBuckets(guard: TestGuard) {
+    for (const name of Object.values(RATE_LIMIT_POLICIES)) {
+      await guard.callHandleRequest({ context, throttler: { name } });
+    }
+  }
+
+  it('applies only the default bucket to undecorated routes', async () => {
+    await runAllBuckets(build());
+    expect(enforced).toEqual([RATE_LIMIT_POLICIES.DEFAULT]);
+  });
+
+  it('applies only the declared bucket to decorated routes', async () => {
+    await runAllBuckets(build({ policy: RATE_LIMIT_POLICIES.COMPETITION }));
+    expect(enforced).toEqual([RATE_LIMIT_POLICIES.COMPETITION]);
+  });
+
+  it('applies the strict auth bucket where declared', async () => {
+    await runAllBuckets(build({ policy: RATE_LIMIT_POLICIES.AUTH }));
+    expect(enforced).toEqual([RATE_LIMIT_POLICIES.AUTH]);
+  });
+});
+
+describe('ScopedThrottlerGuard tracker', () => {
+  it('buckets verified callers by user id', async () => {
+    const guard = build({ verifiedSub: 'user-1' });
+
+    await expect(
+      guard.callGetTracker({
+        headers: { authorization: 'Bearer token' },
+        ip: '10.0.0.1',
+      }),
+    ).resolves.toBe('user:user-1');
+  });
+
+  it('falls back to the client address for anonymous callers', async () => {
+    const guard = build();
+
+    await expect(
+      guard.callGetTracker({ headers: {}, ip: '10.0.0.1' }),
+    ).resolves.toBe('ip:10.0.0.1');
+  });
+
+  it('never trusts an unverifiable token for bucketing', async () => {
+    const guard = build();
+
+    await expect(
+      guard.callGetTracker({
+        headers: { authorization: 'Bearer forged' },
+        ip: '10.0.0.1',
+      }),
+    ).resolves.toBe('ip:10.0.0.1');
+  });
+});

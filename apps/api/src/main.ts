@@ -2,16 +2,19 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
+import { assertSecureRuntimeConfig } from './config/security.config.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   const config = app.get(ConfigService);
+  assertSecureRuntimeConfig(config);
 
   app.setGlobalPrefix('api');
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       transform: true,
+      transformOptions: { enableImplicitConversion: true },
     }),
   );
   app.enableCors({

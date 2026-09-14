@@ -5,39 +5,35 @@ change.
 
 ## Current Phase
 
-- Phase 0 complete — NestJS + Next.js monorepo
-  initialized with Prisma 7, PostgreSQL, Redis, BullMQ.
-- Next: Phase 1 — Domain (Competition models,
-  lifecycle, guards, admin hooks).
+- Phase 8 complete — production hardening.
+- All eight delivery phases from `details.md` §60 are done.
 
 ## Current Goal
 
-- Start Phase 1 domain work: `nest g` live-challenge
-  module, Competition / CompetitionParticipant /
-  CompetitionEvent Prisma models, nullable Job
-  competition relation, lifecycle + permissions.
+- Operate / iterate: run load scripts against a staging
+  environment, wire `/api/metrics` into host monitoring,
+  resolve open admin-UI question.
 
 ## Completed
 
-- Rewrote `details.md` from Django/DRF/Celery to
-  NestJS + Next.js + BullMQ + Socket.IO.
-- Filled `CLAUDE.md` and all `context/` files for this
-  stack and feature.
-- Locked NestJS scaffolding to Nest CLI (`nest g`) and
-  the database to Prisma 7 + PostgreSQL.
-- Phase 0 — Project initialization:
-  - npm workspaces monorepo: `apps/api` + `apps/web`
-  - NestJS API (strict TS, `/api` prefix, port 3001)
-  - Next.js App Router + Tailwind (port 3000)
-  - Prisma 7 + PostgreSQL via `prisma.config.ts`,
-    `@prisma/adapter-pg`, core User / Company /
-    CompanyMembership / Job models, `init_core`
-    migration
-  - Redis + BullMQ + Throttler wired in Nest
-  - Passport JWT packages installed (auth logic later)
-  - Socket.IO server + client packages installed
-  - `docker-compose.yml` for Postgres 16 + Redis 7
-  - Verified `GET /api/health` and Next.js homepage
+- Phase 0 — Monorepo init.
+- Phase 1 — Competition domain + JWT auth + lifecycle.
+- Phase 2 — Competition-aware job publish + atomic score.
+- Phase 3 — Socket.IO realtime gateway + web socket client.
+- Phase 4 — Participant UI.
+- Phase 5 — Observer / TV UI.
+- External job server integration.
+- Phase 6 — Audit / security.
+- Phase 7 — Screen sharing (LiveKit).
+- Phase 8 — Production hardening:
+  - Failure isolation: realtime emit never fails scoring
+  - `/api/health/live`, `/api/health/ready`, `/api/metrics`
+  - In-process competition metrics + alert hints
+  - Redis presence timeouts + atomic session Lua swap
+  - Index review documented; EXPLAIN helper script
+  - Load script (`load:competition`) and WS capacity
+    script (`load:ws-capacity`)
+  - Unit tests for metrics + Redis/WS failure isolation
 
 ## In Progress
 
@@ -45,54 +41,57 @@ change.
 
 ## Next Up
 
-- Phase 1 — Domain via Nest CLI + Prisma 7:
-  Competition, Participant, lifecycle, Job relation,
-  permissions, admin hooks.
+- Wire host monitoring/alerts to `/api/metrics` and
+  readiness (no Datadog in-repo).
+- Run §54 100-participant load against staging.
+- Decide admin UI surface (open question below).
 
 ## Open Questions
 
-- Confirm whether WebRTC screen sharing is required for
-  the first production release (Phase 7 is optional).
 - Confirm whether an admin UI should live in Next.js
   or as NestJS admin endpoints only for early phases.
 
 ## Architecture Decisions
 
-- Monorepo layout: `apps/api` (NestJS) + `apps/web`
-  (Next.js App Router). npm workspaces.
-- NestJS owns scoring, timer, authorization, and publish
-  rules. Next.js is UI only.
-- NestJS modules, controllers, services, gateways,
-  guards, and DTOs are created with `nest g`.
-- Database is Prisma 7 + PostgreSQL. Initialize and
-  migrate with Prisma CLI. Use `@prisma/adapter-pg`.
-  Do not use TypeORM.
-- Nest 12 scaffold is ESM (`"type": "module"`); Prisma
-  client uses default ESM output (not `moduleFormat =
-  "cjs"`).
-- Auth strategy: Passport JWT (packages present; login
-  flows in a later phase).
-- Queue: BullMQ backed by Redis.
-- Reuse the existing Job model with a nullable
-  competition relation. No second Job model.
-- PostgreSQL is the score source of truth. Redis is
-  ephemeral realtime state.
-- Score = successfully published valid competition jobs
-  only, incremented after commit, idempotent on retry.
-- Tie-break: score DESC, then earlier time of reaching
-  that score ASC.
-- Realtime: HTTP snapshot + Socket.IO push. No observer
-  polling loop after every score change.
-- Screen share, if built, uses WebRTC + SFU — never
-  NestJS WebSockets for video.
+- Participant UI is Client Components for sockets/timer.
+- Session token stored in `localStorage` for demo auth
+  (not score authority).
+- Job create/publish calls Nest `/api/jobs` with
+  `competitionId`; score still authoritative on server.
+- Primary competition scoring origin is the external job
+  server webhook; local `/api/jobs` remains for demos.
+- Observer/TV clients use the same HTTP snapshot plus
+  Socket.IO recovery path as participant clients.
+- Competition observer feeds require an administrator
+  or registered participant.
+- External ingest uses receive-time eligibility against
+  `end_at`; job-server `published_at` is audit-only.
+- Multi-tab policy: one active competition socket per
+  participant; newer join supersedes older.
+- `ADMIN_BOOTSTRAP_TOKEN` is first-admin only.
+- Screen media uses LiveKit SFU; Nest only issues /
+  revokes credentials.
+- Redis/WebSocket failures must not corrupt Postgres
+  scores; realtime broadcasts are best-effort after commit.
 
 ## Session Notes
 
-- `details.md` is the full spec (sections 1–63).
-- Context files are the implementation contract for
-  agents. Read them before coding.
-- Do not reintroduce Django, Celery, Django Admin, or
-  TypeORM.
-- Prefer Nest CLI and Prisma 7 CLI for initialization.
-- Phase 0 left competition domain out of scope by
-  design.
+- Open `/competition/<uuid>` after creating a competition
+  via API. Sign in as an employer participant.
+- Open `/competition/<uuid>/live` for the authenticated
+  presentation screen.
+- For screen share locally: `docker compose up -d livekit`
+  and set `LIVEKIT_URL`, `LIVEKIT_PUBLIC_URL`,
+  `LIVEKIT_API_KEY=devkey`, `LIVEKIT_API_SECRET=secret`
+  in `apps/api/.env`.
+- Link a job-server user id via register/join
+  `externalUserId`, then POST signed events to
+  `/api/integrations/job-events`.
+- Provision the first admin with `x-admin-bootstrap-token`;
+  afterward use an admin JWT for `/api/auth/admins`.
+- Load tests (API running):
+  `ADMIN_EMAIL=... ADMIN_PASSWORD=... npm run load:competition -w api`
+  `PARTICIPANTS=100` for the §54 target.
+  `npm run load:ws-capacity -w api` for observer sockets.
+  `COMPETITION_ID=... npm run explain:competition -w api`
+  for index plans.

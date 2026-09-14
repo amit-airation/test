@@ -21,17 +21,63 @@ enum JobStatus {
   ARCHIVED
 }
 
-model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  passwordHash String
-  name         String
-  role         UserRole @default(EMPLOYER)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+enum JobSource {
+  INTERNAL
+  EXTERNAL
+}
 
-  memberships CompanyMembership[]
-  jobs        Job[]               @relation("JobCreatedBy")
+enum CompetitionStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  ENDED
+  FINALIZED
+  CANCELLED
+}
+
+enum ParticipantStatus {
+  REGISTERED
+  READY
+  ACTIVE
+  DISCONNECTED
+  FINISHED
+  DISQUALIFIED
+}
+
+enum CompetitionEventType {
+  CREATED
+  SCHEDULED
+  REGISTERED
+  JOINED
+  STARTED
+  JOB_CREATED
+  JOB_PUBLISHED
+  JOB_UNPUBLISHED
+  PUBLISH_FAILED
+  DISCONNECTED
+  RECONNECTED
+  SCREEN_SHARE_STARTED
+  SCREEN_SHARE_STOPPED
+  DISQUALIFIED
+  COMPETITION_ENDED
+  FINALIZED
+  CANCELLED
+}
+
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  passwordHash   String
+  name           String
+  role           UserRole @default(EMPLOYER)
+  externalUserId String?  @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  memberships           CompanyMembership[]
+  jobs                  Job[]                     @relation("JobCreatedBy")
+  competitionsCreated   Competition[]             @relation("CompetitionCreatedBy")
+  participants          CompetitionParticipant[]
 }
 
 model Company {
@@ -40,8 +86,9 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships CompanyMembership[]
-  jobs        Job[]
+  memberships  CompanyMembership[]
+  jobs         Job[]
+  participants CompetitionParticipant[]
 }
 
 model CompanyMembership {
@@ -59,18 +106,109 @@ model CompanyMembership {
 }
 
 model Job {
-  id          String    @id @default(uuid())
-  title       String
-  status      JobStatus @default(DRAFT)
-  publishedAt DateTime?
-  createdById String
-  companyId   String
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id             String    @id @default(uuid())
+  title          String
+  description    String?
+  location       String?
+  employmentType String?
+  status         JobStatus @default(DRAFT)
+  source         JobSource @default(INTERNAL)
+  publishedAt    DateTime?
+  scoredAt       DateTime?
+  idempotencyKey String?
+  externalJobId  String?   @unique
+  createdById    String
+  companyId      String?
+  competitionId  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  createdBy User    @relation("JobCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
-  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy   User         @relation("JobCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  competition Competition? @relation(fields: [competitionId], references: [id], onDelete: SetNull)
 
+  @@unique([createdById, idempotencyKey])
   @@index([companyId, status])
   @@index([createdById, status, publishedAt])
+  @@index([competitionId, status, createdById, publishedAt])
+  @@index([source, externalJobId])
+}
+
+/// Ledger ensuring each competition job increments score at most once.
+model CompetitionJobScore {
+  id            String   @id @default(uuid())
+  competitionId String
+  participantId String
+  jobId         String   @unique
+  createdAt     DateTime @default(now())
+
+  @@index([competitionId, participantId])
+}
+
+model Competition {
+  id               String            @id @default(uuid())
+  name             String
+  description      String?
+  status           CompetitionStatus @default(DRAFT)
+  durationSeconds  Int               @default(300)
+  /// When false, only participants pre-registered by an admin may join.
+  allowOpenJoin    Boolean           @default(false)
+  scheduledStartAt DateTime?
+  actualStartAt    DateTime?
+  endAt            DateTime?
+  finalizedAt      DateTime?
+  winnerUserId     String?
+  createdById      String
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  createdBy    User                     @relation("CompetitionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  participants CompetitionParticipant[]
+  events       CompetitionEvent[]
+  jobs         Job[]
+
+  @@index([status, scheduledStartAt])
+  @@index([status, endAt])
+}
+
+model CompetitionParticipant {
+  id              String            @id @default(uuid())
+  competitionId   String
+  userId          String
+  companyId       String?
+  status          ParticipantStatus @default(REGISTERED)
+  joinedAt        DateTime?
+  lastHeartbeatAt DateTime?
+  completedAt     DateTime?
+  finalScore      Int               @default(0)
+  finalRank       Int?
+  scoreReachedAt  DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  competition Competition         @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company     Company?            @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  events      CompetitionEvent[]
+
+  @@unique([competitionId, userId])
+  @@index([competitionId, finalScore, scoreReachedAt])
+  @@index([userId])
+}
+
+model CompetitionEvent {
+  id            String               @id @default(uuid())
+  competitionId String
+  participantId String?
+  eventType     CompetitionEventType
+  metadata      Json?
+  createdAt     DateTime             @default(now())
+
+  competition Competition            @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  participant CompetitionParticipant? @relation(fields: [participantId], references: [id], onDelete: SetNull)
+
+  @@index([competitionId, createdAt])
+  @@index([eventType])
+  @@index([competitionId, eventType, createdAt])
+  @@index([participantId, createdAt])
 }

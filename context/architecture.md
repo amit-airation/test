@@ -10,7 +10,7 @@
 | Database     | Prisma 7 + PostgreSQL                           | Authoritative competition, job, and score state   |
 | Cache / bus  | Redis                                           | Presence, leaderboard cache, Socket.IO adapter    |
 | Workers      | BullMQ or existing NestJS queue                 | Finalization, notifications, cleanup, reconcile   |
-| Media        | WebRTC + SFU (optional, later)                  | Screen share only — never scoring                 |
+| Media        | WebRTC + LiveKit SFU                            | Screen share only — never scoring                 |
 
 Greenfield monorepo layout (Phase 0):
 
@@ -28,8 +28,9 @@ Do not introduce TypeORM. Prisma 7 uses `prisma.config.ts`, the
 - `src/modules/live-challenge/` (or existing NestJS
   module path) — competition domain, lifecycle, scoring,
   leaderboard, timer, guards, gateway, processors
-- Existing Job module / service — create and publish jobs;
-  competition module orchestrates, does not duplicate
+- Existing Job module / service — create and publish jobs locally;
+  competition module orchestrates, does not duplicate. External job
+  servers call `POST /api/integrations/job-events` instead of `/jobs`.
 - Existing User / Company / CompanyMembership — identity
   and company resolution
 - Existing auth / Passport / JWT / session — HTTP and
@@ -42,6 +43,9 @@ Do not introduce TypeORM. Prisma 7 uses `prisma.config.ts`, the
 - Next.js `components/competition/` — live widgets
 - Next.js `lib/competition/` — API client, socket client,
   shared types
+- LiveKit SFU — screen media only. NestJS mints short-lived
+  room tokens; Next.js participant/observer clients connect
+  with `livekit-client`. Video never traverses Nest sockets.
 
 Next.js is the UI layer only. NestJS owns scoring, timer
 authority, authorization, and job-publish rules.
@@ -98,9 +102,12 @@ differs.
 ## Storage Model
 
 - **PostgreSQL via Prisma 7**: competitions, participants,
-  jobs with nullable `competitionId`, audit events, final
+  jobs with nullable `competitionId`, `User.externalUserId`,
+  `Job.externalJobId` / `Job.source`, audit events, final
   scores, final ranks. This is the only source of truth
-  for score. Initialize with `npx prisma init
+  for score. External publishes are mirrored into `Job`
+  (`source = EXTERNAL`) so reconciliation still works.
+  Initialize with `npx prisma init
   --datasource-provider postgresql`. Evolve with
   `npx prisma migrate dev` and `npx prisma generate`.
 - **Redis**: Socket.IO adapter fan-out, presence,
@@ -131,8 +138,12 @@ reconcilable against Jobs.
 - Resolve company through existing CompanyMembership.
   Do not duplicate membership logic.
 - **Participant**: view own competition, create/publish
-  competition jobs, view permitted leaderboard. Cannot
-  change score, rank, or timing.
+  competition jobs (local or via the external job server),
+  view permitted leaderboard. Cannot change score, rank, or
+  timing. External publishes are attributed through
+  `User.externalUserId`.
+- **External job server**: HMAC-signed ingest only. Cannot
+  set score, rank, or timer. Must not use participant JWT.
 - **Observer**: view competition, leaderboard, permitted
   participant info, authorized screens. Cannot publish
   or mutate competition state.
@@ -173,7 +184,9 @@ published after end_at = does not count
 ```
 
 Use server / database timestamps. Never the Next.js
-countdown.
+countdown. For external ingest, eligibility uses this
+NestJS receive time — never the job server's
+`published_at`.
 
 ## Realtime model
 
@@ -226,3 +239,53 @@ Next.js holds sockets only in Client Components.
 13. Reconnect never resets timer or score.
 14. A Redis / WebSocket failure must not corrupt the
     authoritative score.
+15. External job ingest is HMAC-authenticated. Retries
+    must not double-count (`Job.externalJobId` unique +
+    `CompetitionJobScore.jobId` unique).
+16. External score attribution resolves the user's single
+    currently LIVE participation. Never trust a client-
+    supplied competition id on the webhook.
+17. One active competition WebSocket session per
+    participant. A newer join supersedes the older socket
+    (`SESSION_SUPERSEDED`); the kicked tab must not clear
+    the new session or write a false disconnect audit.
+18. Admin bootstrap token works only until the first ADMIN
+    exists; afterward provisioning requires an admin JWT.
+19. Screen sharing uses LiveKit. NestJS only mints short-
+    lived credentials and revokes rooms/publishers. Media
+    never flows through Nest WebSockets. Sharing never
+    affects score.
+20. Observability: `/api/health/live` is process liveness;
+    `/api/health/ready` checks Postgres (required) and
+    Redis (degraded if down). `/api/metrics` exposes
+    in-process counters. Alert on publish failure rate,
+    realtime emit failures, and ready=down.
+
+## Observability & hardening (Phase 8)
+
+- Metrics live in `CompetitionMetricsService` (in-process).
+  There is no Datadog agent in this repo yet — wire the
+  JSON snapshot or structured logs into the host platform.
+- `CompetitionRealtimeService.emitScoreAndLeaderboard`
+  never throws to scoring callers.
+- Presence Redis uses short timeouts, no offline queue,
+  and an atomic Lua session swap.
+- Load / capacity scripts:
+  - `npm run load:competition -w api`
+  - `npm run load:ws-capacity -w api`
+  - `npm run explain:competition -w api`
+
+## Index review (Phase 8)
+
+Existing Prisma indexes cover the §41 query shapes:
+
+| Query | Index |
+| ----- | ----- |
+| Leaderboard order | `CompetitionParticipant(competitionId, finalScore, scoreReachedAt)` |
+| Live end timer | `Competition(status, endAt)` |
+| Schedule start | `Competition(status, scheduledStartAt)` |
+| Competition jobs | `Job(competitionId, status, createdById, publishedAt)` |
+| Event timeline | `CompetitionEvent(competitionId, eventType, createdAt)` |
+| External user | `User.externalUserId` UNIQUE |
+
+Use `explain:competition` under load before adding more.

@@ -46,3 +46,80 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+::selection {
+  background: color-mix(in srgb, var(--primary-accent) 30%, transparent);
+}
+
+:fullscreen {
+  background: var(--background);
+  overflow: auto;
+}
+
+@keyframes live-score-highlight {
+  0%,
+  100% {
+    transform: scale(1);
+    border-color: var(--border);
+    background-color: var(--surface);
+  }
+  35% {
+    transform: scale(1.02);
+    border-color: var(--success);
+    background-color: color-mix(
+      in srgb,
+      var(--success) 12%,
+      var(--surface)
+    );
+  }
+}
+
+@keyframes live-score-flash {
+  0% {
+    opacity: 0;
+    transform: translateY(0.35rem);
+  }
+  20%,
+  70% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes score-bump {
+  0%,
+  100% {
+    transform: scale(1);
+    color: var(--foreground);
+  }
+  35% {
+    transform: scale(1.07);
+    color: var(--success);
+  }
+}
+
+.live-score-highlight {
+  animation: live-score-highlight 1.4s ease-out both;
+}
+
+.live-score-flash {
+  animation: live-score-flash 1.4s ease-out both;
+}
+
+.score-bump {
+  animation: score-bump 1.2s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

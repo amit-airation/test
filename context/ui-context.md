@@ -143,11 +143,14 @@ Score change shows `+1 JOB`. Rank change animates row
 position (`#3 → #2`). Animation must not break
 functionality or accessibility.
 
-## Screen sharing (optional, later)
+## Screen sharing
 
-Grid mode and focus mode. Explicit browser permission.
-Clear copy: “Your screen is being shared with competition
-observers.” Screen share never determines score.
+Grid mode and focus mode on the observer/TV screen.
+Participant controls live on `/competition/[id]`. Explicit
+browser permission. Clear copy: “Your screen is being
+shared with competition observers.” Screen share never
+determines score. When LiveKit is not configured the UI
+shows “Screen share unavailable.”
 
 ## Icons
 

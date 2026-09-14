@@ -31,6 +31,18 @@ services:
       timeout: 5s
       retries: 10
 
+  # Dev-only SFU for Phase 7 screen sharing. Uses LiveKit --dev keys
+  # (devkey/secret). Never use those keys in production.
+  livekit:
+    image: livekit/livekit-server:v1.8.4
+    container_name: hirance-livekit
+    restart: unless-stopped
+    command: --dev --bind 0.0.0.0 --node-ip 127.0.0.1
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+
 volumes:
   hirance_postgres_data:
   hirance_redis_data:

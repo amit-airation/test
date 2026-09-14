@@ -710,6 +710,98 @@ The score should increase only after the publish operation is successfully commi
 
 ---
 
+# 15.1 External job server ingestion
+
+Job creation may happen on a separate Hirance job server. This competition
+backend still owns scoring, the timer, and the leaderboard.
+
+Identity:
+
+* Store the job-server user id on `User.externalUserId` (unique, nullable).
+* Admins set it when registering a participant (`externalUserId` on
+  `POST /competitions/:id/register`). Participants may also send it on join.
+* The job server never sends this backend's user id. It sends its own.
+
+Ingest:
+
+```text
+POST /api/integrations/job-events
+```
+
+Authenticate with HMAC-SHA256, not JWT:
+
+```text
+payload = `${x-hirance-timestamp}.${rawBody}`
+signature = HMAC-SHA256(EXTERNAL_JOB_WEBHOOK_SECRET, payload)
+```
+
+Headers:
+
+```text
+x-hirance-timestamp   Unix seconds
+x-hirance-signature   hex digest, optionally prefixed with sha256=
+```
+
+Reject timestamps outside `EXTERNAL_JOB_WEBHOOK_SKEW_SECONDS` (default 300).
+Fail closed if the secret is missing.
+
+Payload:
+
+```json
+{
+  "event_id": "uuid",
+  "event": "JOB_PUBLISHED",
+  "external_user_id": "hirance-user-123",
+  "external_job_id": "hirance-job-987",
+  "published_at": "2026-09-14T10:21:32.412Z",
+  "job": {
+    "title": "...",
+    "description": "...",
+    "location": "...",
+    "employment_type": "FULL_TIME"
+  }
+}
+```
+
+Also accepted: `"event": "JOB_UNPUBLISHED"` for delete / unpublish upstream.
+
+Resolution:
+
+1. Look up `User` by `externalUserId`.
+2. Find that user's currently `LIVE` participation. Zero matches is a no-op
+   (`no_live_competition`). More than one is a `409`.
+3. Eligibility uses **this backend's receive time** against `end_at`.
+   `published_at` from the job server is audit-only.
+4. Mirror the job into the existing `Job` table (`source = EXTERNAL`).
+5. Increment score through the same transactional ledger as local publish.
+6. Broadcast `SCORE_UPDATED` / `LEADERBOARD_UPDATED` only after commit.
+
+Idempotency: `Job.externalJobId` is unique, and `CompetitionJobScore.jobId`
+is unique. A retried webhook scores at most once.
+
+Unpublish reverses the ledger (score floor 0) and archives the mirrored job.
+Rejected once the competition is `FINALIZED`.
+
+Response:
+
+```json
+{
+  "scored": true,
+  "my_score": 12,
+  "competition_id": "uuid",
+  "reason": null,
+  "job_id": "uuid"
+}
+```
+
+`reason` values include `unknown_external_user`, `no_live_competition`,
+`already_scored`, `competition_ended`, `competition_finalized`.
+
+The in-app `POST /jobs` create/publish path remains available for demos
+and tests. Both origins share the same scoring path.
+
+---
+
 # 16. Atomic scoring
 
 The score update must be safe under concurrent requests.
@@ -1442,6 +1534,10 @@ Next.js should call these NestJS endpoints through the existing API client. Do n
 # 39. Competition-aware Job API
 
 Prefer integrating competition context into the existing Job APIs rather than creating duplicate job APIs.
+
+When jobs are created on the external job server, that server calls
+`POST /api/integrations/job-events` with the participant's
+`external_user_id` instead of posting to `/jobs`. See section 15.1.
 
 For example:
 
