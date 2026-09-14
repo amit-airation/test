@@ -264,6 +264,7 @@ Public hosts:
 |------|------|
 | Competition UI | `https://test.amitverma01.dev` |
 | Competition API + Socket.IO | `https://api.test.amitverma01.dev` |
+| LiveKit (screen share) | `wss://live.test.amitverma01.dev` |
 | Hirance job server (external) | `https://api.hirance.com` |
 
 Job-server webhook target (configure on Hirance, not in this nginx):
@@ -280,7 +281,12 @@ Image and templates live under [`docker/nginx/`](../docker/nginx/).
 |------|--------|
 | `test.amitverma01.dev` | `/` → Next.js |
 | `api.test.amitverma01.dev` | `/api/` → NestJS, `/socket.io/` → Socket.IO |
-| both (HTTP `:80`) | ACME webroot + redirect to HTTPS |
+| `live.test.amitverma01.dev` | `/` → LiveKit signaling (WSS) |
+| both/all (HTTP `:80`) | ACME webroot + redirect to HTTPS |
+
+WebRTC media for screen share uses the instance **UDP 7882** and
+**TCP 7881** directly (open in the EC2 security group). Signaling goes
+through nginx on `wss://live.test.amitverma01.dev`.
 
 `api.hirance.com` is **not** served by this stack — it is the external
 job server that calls our API webhook.
@@ -289,9 +295,9 @@ HTTP `:80` redirects to HTTPS. TLS terminates on `:443`.
 
 #### Issue TLS certificate (Let's Encrypt)
 
-DNS for **both** `test.amitverma01.dev` and
-`api.test.amitverma01.dev` must point at this host. Port **80** must be
-free for the first issue (standalone). One SAN certificate covers both.
+DNS for **`test.amitverma01.dev`**, **`api.test.amitverma01.dev`**, and
+**`live.test.amitverma01.dev`** must point at this host. Port **80** must be
+free for the first issue (standalone). One SAN certificate covers all three.
 
 ```bash
 # EC2 Ubuntu (default)
@@ -304,7 +310,8 @@ npm run ssl:cert:staging
 npm run ssl:renew
 ```
 
-Defaults: domains `test.amitverma01.dev,api.test.amitverma01.dev`,
+Defaults: domains
+`test.amitverma01.dev,api.test.amitverma01.dev,live.test.amitverma01.dev`,
 email `amitz.airation@gmail.com`. Override with `DOMAINS` / `EMAIL`
 or flags `--domains` / `--email`.
 
@@ -339,16 +346,20 @@ Env vars substituted at container start (`envsubst`):
 |----------|---------|---------|
 | `API_UPSTREAM` | `host.docker.internal:3001` | Nest listen host:port |
 | `WEB_UPSTREAM` | `host.docker.internal:3000` | Next listen host:port |
+| `LIVEKIT_UPSTREAM` | `livekit:7880` | LiveKit signaling |
 | `UI_SERVER_NAME` | `test.amitverma01.dev` | UI `server_name` |
 | `API_SERVER_NAME` | `api.test.amitverma01.dev` | API `server_name` |
+| `LIVEKIT_SERVER_NAME` | `live.test.amitverma01.dev` | LiveKit `server_name` |
 
 ### 6.8 Deploy on EC2 Ubuntu
 
 Assumes one Ubuntu EC2 instance (or similar) with Elastic IP, API on
-host `:3001`, web on host `:3000`, nginx in Docker.
+host `:3001`, web on host `:3000`, nginx + LiveKit in Docker.
 
-1. **Security group** — inbound TCP `22` (your IP), `80`, `443`.
-2. **DNS** — `test.amitverma01.dev` and `api.test.amitverma01.dev` → EIP.
+1. **Security group** — inbound TCP `22` (your IP), `80`, `443`, `7881`;
+   UDP `7882`.
+2. **DNS** — `test.amitverma01.dev`, `api.test.amitverma01.dev`, and
+   `live.test.amitverma01.dev` → EIP.
 3. **Bootstrap Docker** (once):
 
 ```bash
@@ -356,13 +367,20 @@ sudo bash scripts/ec2-bootstrap.sh
 # log out/in so docker group applies
 ```
 
-4. **App env** — production `apps/api/.env` and `apps/web/.env.local`:
+4. **App env** — production `apps/api/.env` and `apps/web/.env.local`
+   (see repo `.env` staging template), including LiveKit:
 
 ```env
 CORS_ORIGIN=https://test.amitverma01.dev
 NEXT_PUBLIC_API_URL=https://api.test.amitverma01.dev/api
 NEXT_PUBLIC_WS_URL=https://api.test.amitverma01.dev
+LIVEKIT_URL=http://127.0.0.1:7880
+LIVEKIT_PUBLIC_URL=wss://live.test.amitverma01.dev
+LIVEKIT_API_KEY=APIstaginghirance01
+LIVEKIT_API_SECRET=staging-livekit-api-secret-at-least-32-chars!!
 ```
+
+Keys must match [`docker/livekit/livekit.staging.yaml`](../docker/livekit/livekit.staging.yaml).
 
 5. **Start API + web** on the host (`npm run start:prod` / `npm run start`
    under process manager), then:
@@ -372,7 +390,7 @@ npm run ssl:cert
 npm run edge:up
 ```
 
-Or combined: `npm run edge:up:cert`.
+`edge:up` starts **nginx + LiveKit**. Or combined: `npm run edge:up:cert`.
 
 6. **TLS renew cron** (example, monthly):
 

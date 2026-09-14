@@ -1,32 +1,45 @@
-# Production nginx edge on EC2 Ubuntu — split UI / API hosts.
+# Staging / production edge on EC2 Ubuntu.
 #
-#   UI:  https://test.amitverma01.dev
-#   API: https://api.test.amitverma01.dev
+#   UI:      https://test.amitverma01.dev
+#   API:     https://api.test.amitverma01.dev
+#   LiveKit: wss://live.test.amitverma01.dev  (+ UDP 7882 / TCP 7881)
 #
-# External job server (not hosted here): https://api.hirance.com
-#   → POSTs HMAC webhooks to
-#     https://api.test.amitverma01.dev/api/integrations/job-events
+# External job server: https://api.hirance.com
+#   → https://api.test.amitverma01.dev/api/integrations/job-events
 #
-# On the instance:
 #   sudo bash scripts/ec2-bootstrap.sh
 #   npm run ssl:cert && npm run edge:up
-#
-# host.docker.internal is provided via extra_hosts host-gateway (Linux Docker).
 
 services:
+  livekit:
+    image: livekit/livekit-server:v1.8.4
+    container_name: hirance-livekit
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./docker/livekit/livekit.staging.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+
   nginx:
     build:
       context: ./docker/nginx
     container_name: hirance-nginx
     restart: unless-stopped
+    depends_on:
+      - livekit
     ports:
       - "${NGINX_HTTP_PORT:-80}:80"
       - "${NGINX_HTTPS_PORT:-443}:443"
     environment:
       API_UPSTREAM: ${API_UPSTREAM:-host.docker.internal:3001}
       WEB_UPSTREAM: ${WEB_UPSTREAM:-host.docker.internal:3000}
+      LIVEKIT_UPSTREAM: ${LIVEKIT_UPSTREAM:-livekit:7880}
       UI_SERVER_NAME: ${UI_SERVER_NAME:-test.amitverma01.dev}
       API_SERVER_NAME: ${API_SERVER_NAME:-api.test.amitverma01.dev}
+      LIVEKIT_SERVER_NAME: ${LIVEKIT_SERVER_NAME:-live.test.amitverma01.dev}
     volumes:
       - ./docker/nginx/certs:/etc/nginx/certs:ro
       - ./docker/nginx/certbot/www:/var/www/certbot:ro

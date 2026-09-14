@@ -3,7 +3,7 @@
 # Target: EC2 Ubuntu (Docker required). Also works on any Linux host.
 #
 # Defaults (SAN cert):
-#   DOMAINS=test.amitverma01.dev,api.test.amitverma01.dev
+#   DOMAINS=test.amitverma01.dev,api.test.amitverma01.dev,live.test.amitverma01.dev
 #   EMAIL=amitz.airation@gmail.com
 #
 # Usage (on the EC2 box):
@@ -24,7 +24,7 @@ CERT_DIR="${ROOT_DIR}/docker/nginx/certs"
 WEBROOT_DIR="${ROOT_DIR}/docker/nginx/certbot/www"
 LE_DIR="${ROOT_DIR}/docker/nginx/certbot/letsencrypt"
 
-DOMAINS_CSV="${DOMAINS:-test.amitverma01.dev,api.test.amitverma01.dev}"
+DOMAINS_CSV="${DOMAINS:-test.amitverma01.dev,api.test.amitverma01.dev,live.test.amitverma01.dev}"
 EMAIL="${EMAIL:-amitz.airation@gmail.com}"
 MODE="standalone"
 STAGING_ARGS=()

@@ -67,15 +67,18 @@ fi
 
 export UI_SERVER_NAME="${UI_SERVER_NAME:-test.amitverma01.dev}"
 export API_SERVER_NAME="${API_SERVER_NAME:-api.test.amitverma01.dev}"
+export LIVEKIT_SERVER_NAME="${LIVEKIT_SERVER_NAME:-live.test.amitverma01.dev}"
 export API_UPSTREAM="${API_UPSTREAM:-host.docker.internal:3001}"
 export WEB_UPSTREAM="${WEB_UPSTREAM:-host.docker.internal:3000}"
+export LIVEKIT_UPSTREAM="${LIVEKIT_UPSTREAM:-livekit:7880}"
 
 "${COMPOSE[@]}" up -d --build
 
 echo
 echo "Edge is up:"
-echo "  UI  https://${UI_SERVER_NAME}"
-echo "  API https://${API_SERVER_NAME}/api/health/live"
-echo "  WS  https://${API_SERVER_NAME}  (Socket.IO /socket.io/)"
+echo "  UI      https://${UI_SERVER_NAME}"
+echo "  API     https://${API_SERVER_NAME}/api/health/live"
+echo "  WS      https://${API_SERVER_NAME}  (Socket.IO /socket.io/)"
+echo "  LiveKit wss://${LIVEKIT_SERVER_NAME}  (screen share; open SG TCP 7881 + UDP 7882)"
 echo
-"${DOCKER[@]}" ps --filter name=hirance-nginx
+"${DOCKER[@]}" ps --filter name=hirance-nginx --filter name=hirance-livekit

@@ -1,4 +1,4 @@
-# Shared upstreams + HTTP ACME / HTTPS redirect for UI + API hosts.
+# Shared upstreams + HTTP ACME / HTTPS redirect for UI + API + LiveKit hosts.
 upstream api_upstream {
   server ${API_UPSTREAM};
   keepalive 32;
@@ -9,9 +9,14 @@ upstream web_upstream {
   keepalive 32;
 }
 
+upstream livekit_upstream {
+  server ${LIVEKIT_UPSTREAM};
+  keepalive 32;
+}
+
 server {
   listen 80;
-  server_name ${UI_SERVER_NAME} ${API_SERVER_NAME};
+  server_name ${UI_SERVER_NAME} ${API_SERVER_NAME} ${LIVEKIT_SERVER_NAME};
 
   location /.well-known/acme-challenge/ {
     root /var/www/certbot;

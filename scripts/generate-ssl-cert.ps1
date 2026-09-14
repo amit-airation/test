@@ -18,7 +18,7 @@
 
 [CmdletBinding()]
 param(
-  [string]$Domains = $(if ($env:DOMAINS) { $env:DOMAINS } else { "test.amitverma01.dev,api.test.amitverma01.dev" }),
+  [string]$Domains = $(if ($env:DOMAINS) { $env:DOMAINS } else { "test.amitverma01.dev,api.test.amitverma01.dev,live.test.amitverma01.dev" }),
   [string]$Email = $(if ($env:EMAIL) { $env:EMAIL } else { "amitz.airation@gmail.com" }),
   [switch]$WebRoot,
   [switch]$Standalone,
