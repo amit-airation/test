@@ -36,9 +36,10 @@ export class ExternalJobEventDto {
   @IsIn([EXTERNAL_JOB_EVENTS.PUBLISHED, EXTERNAL_JOB_EVENTS.UNPUBLISHED])
   event!: (typeof EXTERNAL_JOB_EVENTS)[keyof typeof EXTERNAL_JOB_EVENTS];
 
+  /** The main server's company UUID — used to look up the round participant. */
   @IsString()
   @MinLength(1)
-  external_user_id!: string;
+  company_id!: string;
 
   @IsString()
   @MinLength(1)
@@ -48,7 +49,9 @@ export class ExternalJobEventDto {
   @IsISO8601()
   published_at?: string;
 
-  @ValidateIf((dto: ExternalJobEventDto) => dto.event === EXTERNAL_JOB_EVENTS.PUBLISHED)
+  @ValidateIf(
+    (dto: ExternalJobEventDto) => dto.event === EXTERNAL_JOB_EVENTS.PUBLISHED,
+  )
   @ValidateNested()
   @Type(() => ExternalJobPayloadDto)
   job?: ExternalJobPayloadDto;

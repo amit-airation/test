@@ -4,12 +4,13 @@ import { CompetitionMetricsService } from '../../../common/observability/competi
 import { COMPETITION_ROOMS } from '../constants.js';
 import {
   WS_EVENTS,
-  type CompetitionLifecyclePayload,
+  type ActiveRoundChangedPayload,
   type LeaderboardUpdatedPayload,
+  type RoundLifecyclePayload,
   type ScoreUpdatedPayload,
   type TimerSnapshotPayload,
 } from '../ws-events.js';
-import { CompetitionLeaderboardService } from './competition-leaderboard.service.js';
+import { RoundLeaderboardService } from './round-leaderboard.service.js';
 
 @Injectable()
 export class CompetitionRealtimeService {
@@ -17,7 +18,7 @@ export class CompetitionRealtimeService {
   private server: Server | null = null;
 
   constructor(
-    private readonly leaderboard: CompetitionLeaderboardService,
+    private readonly leaderboard: RoundLeaderboardService,
     private readonly metrics: CompetitionMetricsService,
   ) {}
 
@@ -37,7 +38,6 @@ export class CompetitionRealtimeService {
     try {
       this.server.to(room).emit(event, payload);
     } catch (error) {
-      // Never let Socket.IO / Redis adapter failures surface to scoring callers.
       this.metrics.recordScoreBroadcast(0, true);
       this.logger.warn({
         event: 'realtime_emit_failed',
@@ -52,50 +52,43 @@ export class CompetitionRealtimeService {
     this.emit(COMPETITION_ROOMS.competition(competitionId), event, payload);
   }
 
-  emitToParticipant(
-    competitionId: string,
-    participantId: string,
-    event: string,
-    payload: unknown,
-  ) {
-    this.emit(
-      COMPETITION_ROOMS.participant(competitionId, participantId),
-      event,
-      payload,
-    );
-  }
-
   /**
-   * Broadcasts after commit. Failures are logged + counted only —
-   * they must never roll back or fail the authoritative score write.
+   * Fetches fresh leaderboard and broadcasts all score-related events.
+   * Failures are logged only — never roll back the DB write.
    */
   async emitScoreAndLeaderboard(input: {
     competitionId: string;
+    roundId: string;
     participantId: string;
-    userId: string;
-    name: string;
+    companyId: string;
+    displayName: string;
     score: number;
     previousScore: number;
     jobId: string;
+    postDurationSeconds: number | null;
   }) {
     const started = Date.now();
     try {
-      const board = await this.leaderboard.getLeaderboard(input.competitionId);
-      const entry = board.participants.find((p) => p.user_id === input.userId);
+      const board = await this.leaderboard.getLeaderboard(input.roundId);
+      const entry = board.participants.find(
+        (p) => p.company_id === input.companyId,
+      );
       const rank = entry?.rank ?? null;
 
       const scorePayload: ScoreUpdatedPayload = {
         event: WS_EVENTS.SCORE_UPDATED,
         competition_id: input.competitionId,
+        round_id: input.roundId,
         participant: {
           id: input.participantId,
-          user_id: input.userId,
-          name: input.name,
+          company_id: input.companyId,
+          display_name: input.displayName,
         },
         score: input.score,
         previous_score: input.previousScore,
         rank,
         job_id: input.jobId,
+        post_duration_seconds: input.postDurationSeconds,
       };
 
       this.emitToCompetition(
@@ -106,18 +99,22 @@ export class CompetitionRealtimeService {
       this.emitToCompetition(input.competitionId, WS_EVENTS.JOB_PUBLISHED, {
         event: WS_EVENTS.JOB_PUBLISHED,
         competition_id: input.competitionId,
+        round_id: input.roundId,
         job_id: input.jobId,
         participant_id: input.participantId,
-        user_id: input.userId,
+        company_id: input.companyId,
+        display_name: input.displayName,
         score: input.score,
+        post_duration_seconds: input.postDurationSeconds,
       });
 
       if (rank != null) {
         this.emitToCompetition(input.competitionId, WS_EVENTS.RANK_CHANGED, {
           event: WS_EVENTS.RANK_CHANGED,
           competition_id: input.competitionId,
+          round_id: input.roundId,
           participant_id: input.participantId,
-          user_id: input.userId,
+          company_id: input.companyId,
           rank,
           score: input.score,
         });
@@ -126,6 +123,7 @@ export class CompetitionRealtimeService {
       const leaderboardPayload: LeaderboardUpdatedPayload = {
         event: WS_EVENTS.LEADERBOARD_UPDATED,
         competition_id: input.competitionId,
+        round_id: input.roundId,
         status: board.status,
         timer: board.timer as TimerSnapshotPayload,
         participants: board.participants,
@@ -137,38 +135,33 @@ export class CompetitionRealtimeService {
       );
 
       this.metrics.recordScoreBroadcast(Date.now() - started);
-      this.logger.log({
-        event: 'realtime_score_broadcast',
-        competition_id: input.competitionId,
-        participant_id: input.participantId,
-        score: input.score,
-        rank,
-        duration_ms: Date.now() - started,
-      });
     } catch (error) {
       this.metrics.recordScoreBroadcast(Date.now() - started, true);
       this.logger.warn({
         event: 'realtime_score_broadcast_failed',
         competition_id: input.competitionId,
-        participant_id: input.participantId,
-        job_id: input.jobId,
+        round_id: input.roundId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
   }
 
-  emitLifecycle(payload: CompetitionLifecyclePayload) {
+  emitRoundLifecycle(payload: RoundLifecyclePayload) {
     this.metrics.recordCompetitionEvent();
     this.emitToCompetition(payload.competition_id, payload.event, payload);
   }
 
+  emitActiveRoundChanged(payload: ActiveRoundChangedPayload) {
+    this.emitToCompetition(
+      payload.competition_id,
+      WS_EVENTS.ACTIVE_ROUND_CHANGED,
+      payload,
+    );
+  }
+
   emitPresence(
     competitionId: string,
-    event:
-      | typeof WS_EVENTS.PARTICIPANT_CONNECTED
-      | typeof WS_EVENTS.PARTICIPANT_DISCONNECTED
-      | typeof WS_EVENTS.PARTICIPANT_DISQUALIFIED
-      | typeof WS_EVENTS.PARTICIPANT_JOINED,
+    event: string,
     data: Record<string, unknown>,
   ) {
     this.emitToCompetition(competitionId, event, {

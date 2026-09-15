@@ -1,9 +1,18 @@
-import { IsIn } from 'class-validator';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 
-export const SCREEN_SHARE_INTENTS = ['publish', 'watch'] as const;
-export type ScreenShareIntent = (typeof SCREEN_SHARE_INTENTS)[number];
+export type ScreenShareIntent = 'publish' | 'watch';
 
 export class ScreenShareTokenDto {
-  @IsIn(SCREEN_SHARE_INTENTS)
+  @IsIn(['publish', 'watch'])
   intent!: ScreenShareIntent;
+
+  /** The requesting company's id — required for publish, optional for watch. */
+  @IsOptional()
+  @IsString()
+  companyId?: string;
+
+  /** Display name shown in the screen share stage. */
+  @IsOptional()
+  @IsString()
+  displayName?: string;
 }

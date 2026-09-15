@@ -12,32 +12,32 @@ import {
   TrackSource,
 } from 'livekit-server-sdk';
 import {
-  CompetitionStatus,
   ParticipantStatus,
-  UserRole,
+  RoundStatus,
 } from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
-import type { AuthUser } from '../../auth/auth.service.js';
 import type { ScreenShareIntent } from '../dto/screen-share-token.dto/screen-share-token.dto.js';
 
 const DEFAULT_TTL_SECONDS = 3600;
 const MIN_TTL_SECONDS = 60;
 const WEAK_LIVEKIT_SECRETS = new Set(['secret', 'devkey', 'change-me']);
 
-export function screenShareRoomName(competitionId: string) {
-  return `hirance-comp-${competitionId}`;
+export function screenShareRoomName(roundId: string) {
+  return `hirance-round-${roundId}`;
 }
 
-export function screenSharePublisherIdentity(userId: string) {
-  return `publisher:${userId}`;
+export function screenSharePublisherIdentity(companyId: string) {
+  return `publisher:${companyId}`;
 }
 
-export function screenShareSubscriberIdentity(userId: string) {
-  return `subscriber:${userId}`;
+export function screenShareSubscriberIdentity(companyId: string) {
+  return `subscriber:${companyId}`;
 }
 
-export function parseScreenSharePublisherUserId(identity: string) {
-  return identity.startsWith('publisher:') ? identity.slice('publisher:'.length) : null;
+export function parseScreenSharePublisherCompanyId(identity: string) {
+  return identity.startsWith('publisher:')
+    ? identity.slice('publisher:'.length)
+    : null;
 }
 
 @Injectable()
@@ -54,66 +54,63 @@ export class ScreenShareService {
   }
 
   isConfigured(): boolean {
-    const cfg = this.readConfig();
-    return Boolean(cfg);
+    return Boolean(this.readConfig());
   }
 
   async issueToken(
-    competitionId: string,
-    user: AuthUser,
+    roundId: string,
+    companyId: string | null,
+    displayName: string,
     intent: ScreenShareIntent,
   ) {
     const livekit = this.requireConfig();
-    const competition = await this.prisma.competition.findUnique({
-      where: { id: competitionId },
+
+    const round = await this.prisma.round.findUnique({
+      where: { id: roundId },
     });
-    if (!competition) {
-      throw new NotFoundException(`Competition ${competitionId} not found`);
-    }
-    if (competition.status !== CompetitionStatus.LIVE) {
+    if (!round) throw new NotFoundException(`Round ${roundId} not found`);
+
+    if (round.status !== RoundStatus.LIVE) {
       throw new ForbiddenException(
-        'Screen sharing is only available while the competition is LIVE',
+        'Screen sharing is only available while the round is LIVE',
       );
     }
 
-    const participant = await this.prisma.competitionParticipant.findUnique({
-      where: {
-        competitionId_userId: { competitionId, userId: user.id },
-      },
-    });
-
-    const isAdmin = user.role === UserRole.ADMIN;
-    if (!participant && !isAdmin) {
-      throw new ForbiddenException(
-        'Observer access requires an administrator or registered participant',
-      );
-    }
-
+    // Participants need a valid non-disqualified record; observers (null companyId) can always watch
     if (intent === 'publish') {
+      if (!companyId) {
+        throw new ForbiddenException(
+          'Only registered participants can share a screen',
+        );
+      }
+      const participant = await this.prisma.roundParticipant.findUnique({
+        where: { roundId_companyId: { roundId, companyId } },
+      });
       if (!participant) {
-        throw new ForbiddenException('Only registered participants can share a screen');
+        throw new ForbiddenException(
+          'You are not registered for this round',
+        );
       }
       if (participant.status === ParticipantStatus.DISQUALIFIED) {
-        throw new ForbiddenException('Disqualified participants cannot share a screen');
+        throw new ForbiddenException(
+          'Disqualified participants cannot share a screen',
+        );
       }
     }
 
-    const ttlSeconds = this.tokenTtlSeconds(competition.endAt);
+    const ttlSeconds = this.tokenTtlSeconds(round.endAt);
     const canPublish = intent === 'publish';
+    const identityBase = companyId ?? `observer-${Date.now()}`;
     const identity = canPublish
-      ? screenSharePublisherIdentity(user.id)
-      : screenShareSubscriberIdentity(user.id);
-    const room = screenShareRoomName(competitionId);
+      ? screenSharePublisherIdentity(identityBase)
+      : screenShareSubscriberIdentity(identityBase);
+    const room = screenShareRoomName(roundId);
 
     const token = new AccessToken(livekit.apiKey, livekit.apiSecret, {
       identity,
-      name: user.name,
+      name: displayName,
       ttl: ttlSeconds,
-      metadata: JSON.stringify({
-        userId: user.id,
-        participantId: participant?.id ?? null,
-        intent,
-      }),
+      metadata: JSON.stringify({ companyId, roundId, intent }),
     });
     token.addGrant({
       roomJoin: true,
@@ -129,8 +126,8 @@ export class ScreenShareService {
     const jwt = await token.toJwt();
     this.logger.log({
       event: 'screen_share_token_issued',
-      competition_id: competitionId,
-      user_id: user.id,
+      round_id: roundId,
+      company_id: companyId,
       intent,
       ttl_seconds: ttlSeconds,
     });
@@ -147,66 +144,55 @@ export class ScreenShareService {
     };
   }
 
-  async closeRoom(competitionId: string) {
+  async closeRoom(roundId: string) {
     const livekit = this.readConfig();
-    if (!livekit) {
-      return;
-    }
+    if (!livekit) return;
     try {
       const rooms = this.roomClient(livekit);
-      await rooms.deleteRoom(screenShareRoomName(competitionId));
-      this.logger.log({
-        event: 'screen_share_room_closed',
-        competition_id: competitionId,
-      });
+      await rooms.deleteRoom(screenShareRoomName(roundId));
+      this.logger.log({ event: 'screen_share_room_closed', round_id: roundId });
     } catch (error) {
       this.logger.warn({
         event: 'screen_share_room_close_failed',
-        competition_id: competitionId,
+        round_id: roundId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
   }
 
-  async kickPublisher(competitionId: string, userId: string) {
+  async kickPublisher(roundId: string, companyId: string) {
     const livekit = this.readConfig();
-    if (!livekit) {
-      return;
-    }
+    if (!livekit) return;
     try {
       const rooms = this.roomClient(livekit);
       await rooms.removeParticipant(
-        screenShareRoomName(competitionId),
-        screenSharePublisherIdentity(userId),
+        screenShareRoomName(roundId),
+        screenSharePublisherIdentity(companyId),
       );
       this.logger.log({
         event: 'screen_share_publisher_kicked',
-        competition_id: competitionId,
-        user_id: userId,
+        round_id: roundId,
+        company_id: companyId,
       });
     } catch (error) {
       this.logger.warn({
         event: 'screen_share_publisher_kick_failed',
-        competition_id: competitionId,
-        user_id: userId,
+        round_id: roundId,
+        company_id: companyId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
   }
 
   private tokenTtlSeconds(endAt: Date | null) {
-    if (!endAt) {
-      return DEFAULT_TTL_SECONDS;
-    }
-    const remaining = Math.ceil((endAt.getTime() - Date.now()) / 1000) + 30;
+    if (!endAt) return DEFAULT_TTL_SECONDS;
+    const remaining = Math.ceil((endAt.getTime() - Date.now()) / 1_000) + 30;
     return Math.max(MIN_TTL_SECONDS, Math.min(DEFAULT_TTL_SECONDS, remaining));
   }
 
   private requireConfig() {
     const cfg = this.readConfig();
-    if (!cfg) {
-      throw new ServiceUnavailableException('Screen share unavailable');
-    }
+    if (!cfg) throw new ServiceUnavailableException('Screen share unavailable');
     return cfg;
   }
 
@@ -214,9 +200,7 @@ export class ScreenShareService {
     const url = this.config.get<string>('LIVEKIT_URL')?.trim();
     const apiKey = this.config.get<string>('LIVEKIT_API_KEY')?.trim();
     const apiSecret = this.config.get<string>('LIVEKIT_API_SECRET')?.trim();
-    if (!url || !apiKey || !apiSecret) {
-      return null;
-    }
+    if (!url || !apiKey || !apiSecret) return null;
     if (
       WEAK_LIVEKIT_SECRETS.has(apiKey) &&
       this.config.get<string>('NODE_ENV') === 'production'
@@ -233,7 +217,11 @@ export class ScreenShareService {
     apiKey: string;
     apiSecret: string;
   }) {
-    return new RoomServiceClient(toHttpUrl(cfg.url), cfg.apiKey, cfg.apiSecret);
+    return new RoomServiceClient(
+      toHttpUrl(cfg.url),
+      cfg.apiKey,
+      cfg.apiSecret,
+    );
   }
 }
 

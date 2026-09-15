@@ -1,6 +1,5 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
 import { SkipThrottle } from '@nestjs/throttler';
 import {
   ConnectedSocket,
@@ -12,30 +11,30 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
+import { timingSafeEqual } from 'node:crypto';
 import type { Server, Socket } from 'socket.io';
-import {
-  CompetitionEventType,
-  ParticipantStatus,
-  UserRole,
-} from '../../../generated/prisma/client.js';
+import { CompetitionEventType } from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
-import type { AuthUser } from '../../auth/auth.service.js';
-import { AuthService } from '../../auth/auth.service.js';
-import { resolveJwtSecret } from '../../../config/security.config.js';
+import { CompetitionMetricsService } from '../../../common/observability/competition-metrics.service.js';
 import { COMPETITION_ROOMS } from '../constants.js';
-import { JoinCompetitionWsDto } from '../dto/join-competition-ws.dto.js';
+import { JoinCompetitionWsDto, JoinRoundWsDto } from '../dto/join-competition-ws.dto.js';
 import { CLIENT_WS_ACTIONS, WS_EVENTS } from '../ws-events.js';
 import { CompetitionAuditService } from '../services/competition-audit.service.js';
 import { CompetitionPresenceService } from '../services/competition-presence.service.js';
 import { CompetitionRealtimeService } from '../services/competition-realtime.service.js';
-import { CompetitionTimerService } from '../services/competition-timer.service.js';
-import { WsConnectionRateLimiterService } from '../services/ws-connection-rate-limiter.service.js';
-import { CompetitionMetricsService } from '../../../common/observability/competition-metrics.service.js';
+import { RoundTimerService } from '../services/round-timer.service.js';
+
+type SocketIdentity = {
+  companyId?: string;
+  displayName?: string;
+  isAdmin: boolean;
+};
 
 type AuthedSocket = Socket & {
   data: {
-    user?: AuthUser;
+    identity?: SocketIdentity;
     competitionId?: string;
+    roundId?: string;
     participantId?: string;
   };
 };
@@ -57,74 +56,80 @@ export class CompetitionGateway
   server!: Server;
 
   constructor(
-    private readonly jwt: JwtService,
     private readonly config: ConfigService,
-    private readonly authService: AuthService,
     private readonly prisma: PrismaService,
     private readonly presence: CompetitionPresenceService,
     private readonly realtime: CompetitionRealtimeService,
-    private readonly timer: CompetitionTimerService,
+    private readonly timer: RoundTimerService,
     private readonly audit: CompetitionAuditService,
-    private readonly connectionLimiter: WsConnectionRateLimiterService,
     private readonly metrics: CompetitionMetricsService,
   ) {}
 
   afterInit(server: Server) {
-    // Namespace middleware runs before connection handlers / client emits.
-    server.use(async (socket, next) => {
-      if (!this.connectionLimiter.consume(this.handshakeKey(socket))) {
-        next(new Error('Too many connection attempts'));
+    server.use((socket, next) => {
+      const provided =
+        (socket.handshake.auth as Record<string, string>)?.eventKey?.trim() ??
+        (socket.handshake.headers['x-event-key'] as string | undefined)?.trim();
+
+      const eventKey = this.config.get<string>('EVENT_ACCESS_KEY', '').trim();
+      const adminKey = this.config.get<string>('ADMIN_KEY', '').trim();
+
+      const isEventKey = this.keysMatch(eventKey, provided ?? '');
+      const isAdminKey = adminKey.length > 0 && this.keysMatch(adminKey, provided ?? '');
+
+      if (!isEventKey && !isAdminKey) {
+        next(new Error('Unauthorized'));
         return;
       }
-      try {
-        const user = await this.authenticateSocket(socket as AuthedSocket);
-        (socket as AuthedSocket).data.user = user;
-        next();
-      } catch {
-        next(new Error('Unauthorized'));
-      }
+
+      (socket as AuthedSocket).data.identity = {
+        isAdmin: isAdminKey,
+      };
+      next();
     });
+
     this.realtime.setServer(server);
     this.logger.log('Competition gateway initialized');
   }
 
-  async handleConnection(client: AuthedSocket) {
+  handleConnection(client: AuthedSocket) {
     this.metrics.recordWebsocketConnected();
     this.logger.log({
       event: 'socket_connected',
-      user_id: client.data.user?.id,
       socket_id: client.id,
     });
   }
 
   async handleDisconnect(client: AuthedSocket) {
     this.metrics.recordWebsocketDisconnected();
-    const { competitionId, participantId, user } = client.data;
-    if (competitionId && participantId) {
+    const { competitionId, roundId, participantId } = client.data;
+
+    if (competitionId && roundId && participantId) {
       const released = await this.presence.releaseSession(
-        competitionId,
+        roundId,
         participantId,
         client.id,
       );
       if (released) {
-        await this.presence.markDisconnected(competitionId, participantId, {
-          persistEvent: true,
-        });
+        await this.presence.markDisconnected(
+          competitionId,
+          roundId,
+          participantId,
+          { persistEvent: true },
+        );
         this.realtime.emitPresence(
           competitionId,
           WS_EVENTS.PARTICIPANT_DISCONNECTED,
           {
+            round_id: roundId,
             participant_id: participantId,
-            user_id: user?.id,
+            company_id: client.data.identity?.companyId,
           },
         );
       }
     }
-    this.logger.log({
-      event: 'socket_disconnected',
-      user_id: user?.id,
-      socket_id: client.id,
-    });
+
+    this.logger.log({ event: 'socket_disconnected', socket_id: client.id });
   }
 
   @SubscribeMessage(CLIENT_WS_ACTIONS.JOIN_COMPETITION)
@@ -133,111 +138,71 @@ export class CompetitionGateway
     @MessageBody() body: JoinCompetitionWsDto,
   ) {
     try {
-      const user = client.data.user;
       const competitionId =
         body?.competitionId ??
         (body as unknown as { data?: { competitionId?: string } })?.data
           ?.competitionId;
-      if (!user) {
-        return { ok: false, error: 'Unauthorized', received: body ?? null };
-      }
+
       if (!competitionId) {
-        return {
-          ok: false,
-          error: 'competitionId required',
-          received: body ?? null,
-        };
+        return { ok: false, error: 'competitionId required' };
       }
 
       const competition = await this.prisma.competition.findUnique({
         where: { id: competitionId },
-      });
-      if (!competition) {
-        return { ok: false, error: 'Competition not found' };
-      }
-
-      const participant = await this.prisma.competitionParticipant.findUnique({
-        where: {
-          competitionId_userId: {
-            competitionId,
-            userId: user.id,
-          },
+        include: {
+          rounds: { orderBy: { roundNumber: 'asc' } },
+          activeRound: true,
         },
       });
-
-      if (!participant && user.role !== UserRole.ADMIN) {
-        return {
-          ok: false,
-          error:
-            'Observer access requires an administrator or registered participant',
-        };
-      }
+      if (!competition) return { ok: false, error: 'Competition not found' };
 
       const room = COMPETITION_ROOMS.competition(competitionId);
       await client.join(room);
       client.data.competitionId = competitionId;
 
-      if (participant) {
-        client.data.participantId = participant.id;
-
-        const { supersededSocketId } = await this.presence.claimSession(
-          competitionId,
-          participant.id,
-          client.id,
-        );
-        if (supersededSocketId) {
-          await this.kickSupersededSocket(
-            supersededSocketId,
-            competitionId,
-            participant.id,
-          );
-        }
-
-        const { reconnected } = await this.presence.markConnected(
-          competitionId,
-          participant.id,
-          user.id,
-        );
-        this.realtime.emitPresence(
-          competitionId,
-          WS_EVENTS.PARTICIPANT_CONNECTED,
-          {
-            participant_id: participant.id,
-            user_id: user.id,
-            name: user.name,
-            reconnected,
-          },
-        );
+      if (body.companyId) {
+        client.data.identity = {
+          ...client.data.identity,
+          isAdmin: client.data.identity?.isAdmin ?? false,
+          companyId: body.companyId,
+          displayName: body.displayName,
+        };
       }
 
-      const timer = this.timer.buildSnapshot(competition);
+      const timer = competition.activeRound
+        ? this.timer.buildSnapshot(competition.activeRound)
+        : null;
+
       client.emit(WS_EVENTS.COMPETITION_STATE, {
         event: WS_EVENTS.COMPETITION_STATE,
         competition_id: competition.id,
         status: competition.status,
-        timer,
+        active_round_id: competition.activeRoundId,
+        round: competition.activeRound
+          ? {
+              id: competition.activeRound.id,
+              name: competition.activeRound.name,
+              round_number: competition.activeRound.roundNumber,
+              status: competition.activeRound.status,
+              timer,
+            }
+          : null,
+        rounds: competition.rounds.map((r) => ({
+          id: r.id,
+          round_number: r.roundNumber,
+          name: r.name,
+          status: r.status,
+        })),
       });
 
-      this.logger.log({
-        event: 'socket_joined_competition',
-        competition_id: competitionId,
-        user_id: user.id,
-        room,
-      });
       this.metrics.recordWebsocketJoin(true);
-
       return {
         ok: true,
         room,
         status: competition.status,
-        timer,
-        participant_id: participant?.id ?? null,
+        active_round_id: competition.activeRoundId,
       };
     } catch (error) {
-      this.logger.error({
-        event: 'socket_join_failed',
-        error: error instanceof Error ? error.message : String(error),
-      });
       this.metrics.recordWebsocketJoin(false);
       return {
         ok: false,
@@ -248,113 +213,157 @@ export class CompetitionGateway
 
   @SubscribeMessage(CLIENT_WS_ACTIONS.LEAVE_COMPETITION)
   async leaveCompetition(@ConnectedSocket() client: AuthedSocket) {
-    const { competitionId, participantId } = client.data;
-    if (!competitionId) {
-      return { ok: true };
-    }
+    const { competitionId } = client.data;
+    if (!competitionId) return { ok: true };
 
     await client.leave(COMPETITION_ROOMS.competition(competitionId));
-    if (participantId) {
-      await client.leave(
-        COMPETITION_ROOMS.participant(competitionId, participantId),
-      );
+    client.data.competitionId = undefined;
+    return { ok: true };
+  }
+
+  @SubscribeMessage(CLIENT_WS_ACTIONS.JOIN_ROUND)
+  async joinRound(
+    @ConnectedSocket() client: AuthedSocket,
+    @MessageBody() body: JoinRoundWsDto,
+  ) {
+    try {
+      const { competitionId, roundId, companyId } = body;
+
+      const round = await this.prisma.round.findUnique({
+        where: { id: roundId },
+      });
+      if (!round || round.competitionId !== competitionId) {
+        return { ok: false, error: 'Round not found' };
+      }
+
+      const roundRoom = COMPETITION_ROOMS.round(roundId);
+      await client.join(roundRoom);
+      client.data.roundId = roundId;
+
+      if (companyId) {
+        const participant = await this.prisma.roundParticipant.findUnique({
+          where: { roundId_companyId: { roundId, companyId } },
+        });
+
+        if (participant) {
+          client.data.participantId = participant.id;
+          client.data.identity = {
+            ...client.data.identity,
+            isAdmin: client.data.identity?.isAdmin ?? false,
+            companyId,
+          };
+
+          const { supersededSocketId } = await this.presence.claimSession(
+            roundId,
+            participant.id,
+            client.id,
+          );
+          if (supersededSocketId) {
+            this.kickSupersededSocket(supersededSocketId, competitionId, participant.id);
+          }
+
+          const { reconnected } = await this.presence.markConnected(
+            competitionId,
+            roundId,
+            participant.id,
+            companyId,
+          );
+
+          this.realtime.emitPresence(
+            competitionId,
+            WS_EVENTS.PARTICIPANT_CONNECTED,
+            {
+              round_id: roundId,
+              participant_id: participant.id,
+              company_id: companyId,
+              display_name: participant.displayName,
+              reconnected,
+            },
+          );
+        }
+      }
+
+      const timer = this.timer.buildSnapshot(round);
+      return { ok: true, room: roundRoom, status: round.status, timer };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'join_round_failed',
+      };
+    }
+  }
+
+  @SubscribeMessage(CLIENT_WS_ACTIONS.LEAVE_ROUND)
+  async leaveRound(@ConnectedSocket() client: AuthedSocket) {
+    const { competitionId, roundId, participantId } = client.data;
+    if (!roundId) return { ok: true };
+
+    await client.leave(COMPETITION_ROOMS.round(roundId));
+
+    if (competitionId && roundId && participantId) {
       const released = await this.presence.releaseSession(
-        competitionId,
+        roundId,
         participantId,
         client.id,
       );
       if (released) {
-        await this.presence.markDisconnected(competitionId, participantId, {
-          persistEvent: true,
-        });
+        await this.presence.markDisconnected(
+          competitionId,
+          roundId,
+          participantId,
+          { persistEvent: true },
+        );
         this.realtime.emitPresence(
           competitionId,
           WS_EVENTS.PARTICIPANT_DISCONNECTED,
-          { participant_id: participantId, user_id: client.data.user?.id },
+          {
+            round_id: roundId,
+            participant_id: participantId,
+            company_id: client.data.identity?.companyId,
+          },
         );
       }
     }
-    client.data.competitionId = undefined;
+
+    client.data.roundId = undefined;
     client.data.participantId = undefined;
     return { ok: true };
-  }
-
-  @SubscribeMessage(CLIENT_WS_ACTIONS.JOIN_PARTICIPANT_ROOM)
-  async joinParticipantRoom(
-    @ConnectedSocket() client: AuthedSocket,
-    @MessageBody() body: { competitionId?: string; participantId?: string },
-  ) {
-    const user = client.data.user;
-    if (!user || !body?.competitionId || !body?.participantId) {
-      return { ok: false, error: 'competitionId and participantId required' };
-    }
-
-    const participant = await this.prisma.competitionParticipant.findUnique({
-      where: { id: body.participantId },
-    });
-    if (!participant || participant.competitionId !== body.competitionId) {
-      return { ok: false, error: 'Participant not found' };
-    }
-
-    // Private rooms: only the owning participant or an admin.
-    if (participant.userId !== user.id && user.role !== UserRole.ADMIN) {
-      return { ok: false, error: 'Forbidden' };
-    }
-
-    const room = COMPETITION_ROOMS.participant(
-      body.competitionId,
-      body.participantId,
-    );
-    await client.join(room);
-    return { ok: true, room };
   }
 
   @SubscribeMessage(CLIENT_WS_ACTIONS.HEARTBEAT)
   async heartbeat(
     @ConnectedSocket() client: AuthedSocket,
-    @MessageBody() body: { competitionId?: string },
+    @MessageBody() body: { roundId?: string },
   ) {
-    const competitionId = body?.competitionId ?? client.data.competitionId;
+    const roundId = body?.roundId ?? client.data.roundId;
     const participantId = client.data.participantId;
-    if (!competitionId || !participantId) {
+
+    if (!roundId || !participantId) {
       return { ok: false, error: 'Not joined as participant' };
     }
 
-    await this.presence.heartbeat(competitionId, participantId);
-    const competition = await this.prisma.competition.findUnique({
-      where: { id: competitionId },
-    });
-    return {
-      ok: true,
-      timer: competition ? this.timer.buildSnapshot(competition) : null,
-    };
+    await this.presence.heartbeat(roundId, participantId);
+    const round = await this.prisma.round.findUnique({ where: { id: roundId } });
+    return { ok: true, timer: round ? this.timer.buildSnapshot(round) : null };
   }
 
-  /**
-   * Optional integrity signal (spec §35). Client-reported and therefore never
-   * authoritative — it is only recorded for dispute review.
-   */
   @SubscribeMessage(CLIENT_WS_ACTIONS.REPORT_SCREEN_SHARE)
   async reportScreenShare(
     @ConnectedSocket() client: AuthedSocket,
-    @MessageBody() body: { sharing?: boolean },
+    @MessageBody() body: { sharing?: boolean; roundId?: string },
   ) {
-    const { competitionId, participantId } = client.data;
-    if (!competitionId || !participantId) {
-      return { ok: false, error: 'Not joined as participant' };
-    }
+    const competitionId = client.data.competitionId;
+    const roundId = body?.roundId ?? client.data.roundId;
+    const participantId = client.data.participantId;
 
-    const participant = await this.prisma.competitionParticipant.findUnique({
-      where: { id: participantId },
-      select: { status: true },
-    });
-    if (participant?.status === ParticipantStatus.DISQUALIFIED) {
-      return { ok: false, error: 'Participant is disqualified' };
+    if (!competitionId || !roundId || !participantId) {
+      return { ok: false, error: 'Not joined as participant' };
     }
 
     await this.audit.record({
       competitionId,
-      participantId,
+      roundId,
+      roundParticipantId: participantId,
       eventType: body?.sharing
         ? CompetitionEventType.SCREEN_SHARE_STARTED
         : CompetitionEventType.SCREEN_SHARE_STOPPED,
@@ -363,61 +372,30 @@ export class CompetitionGateway
     return { ok: true };
   }
 
-  private handshakeKey(socket: Socket): string {
-    const forwarded = socket.handshake.headers['x-forwarded-for'];
-    const first = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-    return first?.split(',')[0].trim() || socket.handshake.address;
-  }
-
-  /**
-   * One active competition session per participant (details.md §56).
-   * The older tab receives SESSION_SUPERSEDED and is disconnected.
-   */
-  private async kickSupersededSocket(
-    socketId: string,
+  private kickSupersededSocket(
+    supersededSocketId: string,
     competitionId: string,
     participantId: string,
   ) {
-    // Nest injects the `/competition` Namespace here (typed as Server).
-    const namespaceSockets = (
-      this.server as unknown as { sockets: Map<string, AuthedSocket> }
-    ).sockets;
-    const older = namespaceSockets.get(socketId);
-    if (!older) {
-      return;
+    const superseded = this.server.sockets.sockets.get(supersededSocketId);
+    if (superseded) {
+      superseded.emit(WS_EVENTS.SESSION_SUPERSEDED, {
+        event: WS_EVENTS.SESSION_SUPERSEDED,
+        competition_id: competitionId,
+        participant_id: participantId,
+      });
+      superseded.disconnect(true);
     }
-    older.emit(WS_EVENTS.SESSION_SUPERSEDED, {
-      event: WS_EVENTS.SESSION_SUPERSEDED,
-      competition_id: competitionId,
-      participant_id: participantId,
-      reason: 'another_session_joined',
-    });
-    // Clear session ownership on the older socket so its disconnect handler
-    // does not release the newer claim or write a false DISCONNECTED audit.
-    older.data.competitionId = undefined;
-    older.data.participantId = undefined;
-    older.disconnect(true);
   }
 
-  private async authenticateSocket(client: AuthedSocket): Promise<AuthUser> {
-    const raw =
-      (client.handshake.auth?.token as string | undefined) ??
-      (typeof client.handshake.headers.authorization === 'string'
-        ? client.handshake.headers.authorization
-        : undefined);
-
-    if (!raw) {
-      throw new Error('Missing token');
+  private keysMatch(a: string, b: string): boolean {
+    try {
+      const bufA = Buffer.from(a, 'utf8');
+      const bufB = Buffer.from(b, 'utf8');
+      if (bufA.length === 0 || bufA.length !== bufB.length) return false;
+      return timingSafeEqual(bufA, bufB);
+    } catch {
+      return false;
     }
-
-    const token = raw.startsWith('Bearer ') ? raw.slice(7) : raw;
-    const payload = await this.jwt.verifyAsync<{ sub: string }>(token, {
-      secret: resolveJwtSecret(this.config),
-    });
-    const user = await this.authService.validateUserById(payload.sub);
-    if (!user) {
-      throw new Error('User not found');
-    }
-    return user;
   }
 }

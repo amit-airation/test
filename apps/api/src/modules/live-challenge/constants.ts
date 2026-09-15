@@ -1,4 +1,7 @@
-export const DEFAULT_COMPETITION_DURATION_SECONDS = 300;
+export const DEFAULT_ROUND_DURATION_SECONDS = 300;
+
+/** Scoring grace period after round.endAt (milliseconds). */
+export const ROUND_GRACE_PERIOD_MS = 3_000;
 
 export const EXTERNAL_JOB_WEBHOOK = {
   TIMESTAMP_HEADER: 'x-hirance-timestamp',
@@ -6,7 +9,6 @@ export const EXTERNAL_JOB_WEBHOOK = {
   SECRET_ENV: 'EXTERNAL_JOB_WEBHOOK_SECRET',
   SKEW_ENV: 'EXTERNAL_JOB_WEBHOOK_SKEW_SECONDS',
   ENABLED_ENV: 'EXTERNAL_JOB_WEBHOOK_ENABLED',
-  REQUIRE_EXTERNAL_USER_ID_ENV: 'REQUIRE_EXTERNAL_USER_ID_ON_JOIN',
   DEFAULT_SKEW_SECONDS: 300,
 } as const;
 
@@ -16,13 +18,12 @@ export const EXTERNAL_JOB_EVENTS = {
 } as const;
 
 export const INGEST_REASONS = {
-  UNKNOWN_EXTERNAL_USER: 'unknown_external_user',
-  NO_LIVE_COMPETITION: 'no_live_competition',
-  MULTIPLE_LIVE_COMPETITIONS: 'multiple_live_competitions',
+  UNKNOWN_COMPANY: 'unknown_company',
+  NO_LIVE_ROUND: 'no_live_round',
+  MULTIPLE_LIVE_ROUNDS: 'multiple_live_rounds',
   ALREADY_SCORED: 'already_scored',
-  COMPETITION_ENDED: 'competition_ended',
-  COMPETITION_NOT_LIVE: 'competition_not_live',
-  COMPETITION_FINALIZED: 'competition_finalized',
+  OUTSIDE_SCORING_WINDOW: 'outside_scoring_window',
+  ROUND_FINALIZED: 'round_finalized',
   UNKNOWN_EXTERNAL_JOB: 'unknown_external_job',
   ALREADY_UNPUBLISHED: 'already_unpublished',
   NOT_SCORED: 'not_scored',
@@ -32,6 +33,5 @@ export const INGEST_REASONS = {
 
 export const COMPETITION_ROOMS = {
   competition: (competitionId: string) => `competition:${competitionId}`,
-  participant: (competitionId: string, participantId: string) =>
-    `competition:${competitionId}:participant:${participantId}`,
+  round: (roundId: string) => `round:${roundId}`,
 } as const;

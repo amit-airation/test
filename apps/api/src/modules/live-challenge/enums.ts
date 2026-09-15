@@ -1,5 +1,6 @@
 export {
   CompetitionStatus,
+  RoundStatus,
   ParticipantStatus,
   CompetitionEventType,
   JobSource,

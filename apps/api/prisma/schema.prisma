@@ -1,5 +1,7 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// Hirance competition server — schema v2
+// Removed: User, CompanyMembership, CompetitionParticipant, CompetitionJobScore
+// Added: Round, RoundParticipant, RoundJobScore
+// Company is now the sole participant identity (sourced from the main Hirance server)
 
 generator client {
   provider = "prisma-client"
@@ -10,23 +12,16 @@ datasource db {
   provider = "postgresql"
 }
 
-enum UserRole {
-  EMPLOYER
-  ADMIN
-}
-
-enum JobStatus {
-  DRAFT
-  PUBLISHED
-  ARCHIVED
-}
-
-enum JobSource {
-  INTERNAL
-  EXTERNAL
-}
+// ─── Enums ───────────────────────────────────────────────────────────────────
 
 enum CompetitionStatus {
+  DRAFT
+  ACTIVE
+  ENDED
+  CANCELLED
+}
+
+enum RoundStatus {
   DRAFT
   SCHEDULED
   LIVE
@@ -44,138 +39,108 @@ enum ParticipantStatus {
   DISQUALIFIED
 }
 
+enum JobStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum JobSource {
+  INTERNAL
+  EXTERNAL
+}
+
 enum CompetitionEventType {
+  // Competition-level
   CREATED
-  SCHEDULED
+  CANCELLED
+  // Round lifecycle
+  ROUND_CREATED
+  ROUND_SCHEDULED
+  ROUND_STARTED
+  ROUND_ENDED
+  ROUND_FINALIZED
+  ROUND_CANCELLED
+  // Participant
   REGISTERED
   JOINED
-  STARTED
-  JOB_CREATED
+  DISCONNECTED
+  RECONNECTED
+  DISQUALIFIED
+  // Scoring
   JOB_PUBLISHED
   JOB_UNPUBLISHED
   PUBLISH_FAILED
-  DISCONNECTED
-  RECONNECTED
+  // Screen share (integrity signal only)
   SCREEN_SHARE_STARTED
   SCREEN_SHARE_STOPPED
-  DISQUALIFIED
-  COMPETITION_ENDED
-  FINALIZED
-  CANCELLED
 }
 
-model User {
-  id             String   @id @default(uuid())
-  email          String   @unique
-  passwordHash   String
-  name           String
-  role           UserRole @default(EMPLOYER)
-  externalUserId String?  @unique
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+// ─── Models ──────────────────────────────────────────────────────────────────
 
-  memberships           CompanyMembership[]
-  jobs                  Job[]                     @relation("JobCreatedBy")
-  competitionsCreated   Competition[]             @relation("CompetitionCreatedBy")
-  participants          CompetitionParticipant[]
-}
-
+/// Company record sourced from the main Hirance job server.
+/// The id is the main server's UUID — passed in by participants at join time.
 model Company {
-  id        String   @id @default(uuid())
+  id        String   @id
   name      String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships  CompanyMembership[]
+  participants RoundParticipant[]
   jobs         Job[]
-  participants CompetitionParticipant[]
 }
 
-model CompanyMembership {
-  id        String   @id @default(uuid())
-  userId    String
-  companyId String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, companyId])
-  @@index([companyId])
-}
-
-model Job {
-  id             String    @id @default(uuid())
-  title          String
-  description    String?
-  location       String?
-  employmentType String?
-  status         JobStatus @default(DRAFT)
-  source         JobSource @default(INTERNAL)
-  publishedAt    DateTime?
-  scoredAt       DateTime?
-  idempotencyKey String?
-  externalJobId  String?   @unique
-  createdById    String
-  companyId      String?
-  competitionId  String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-
-  createdBy   User         @relation("JobCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
-  company     Company?     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  competition Competition? @relation(fields: [competitionId], references: [id], onDelete: SetNull)
-
-  @@unique([createdById, idempotencyKey])
-  @@index([companyId, status])
-  @@index([createdById, status, publishedAt])
-  @@index([competitionId, status, createdById, publishedAt])
-  @@index([source, externalJobId])
-}
-
-/// Ledger ensuring each competition job increments score at most once.
-model CompetitionJobScore {
-  id            String   @id @default(uuid())
-  competitionId String
-  participantId String
-  jobId         String   @unique
-  createdAt     DateTime @default(now())
-
-  @@index([competitionId, participantId])
-}
-
+/// Competition is a named container for one or more sequential rounds.
+/// The admin sets activeRoundId to control what observers see live.
 model Competition {
-  id               String            @id @default(uuid())
-  name             String
-  description      String?
-  status           CompetitionStatus @default(DRAFT)
-  durationSeconds  Int               @default(300)
-  /// When false, only participants pre-registered by an admin may join.
-  allowOpenJoin    Boolean           @default(false)
+  id            String            @id @default(uuid())
+  name          String
+  description   String?
+  status        CompetitionStatus @default(DRAFT)
+  /// Admin-controlled: which round is currently displayed on the observer screen.
+  activeRoundId String?           @unique
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  rounds      Round[]
+  activeRound Round?             @relation("ActiveRound", fields: [activeRoundId], references: [id])
+  events      CompetitionEvent[]
+}
+
+/// A single timed round within a competition.
+/// Each round has its own participants, scoring window (endAt + 3s grace), and leaderboard.
+model Round {
+  id               String      @id @default(uuid())
+  competitionId    String
+  roundNumber      Int
+  name             String?
+  status           RoundStatus @default(DRAFT)
+  durationSeconds  Int         @default(300)
   scheduledStartAt DateTime?
   actualStartAt    DateTime?
   endAt            DateTime?
   finalizedAt      DateTime?
-  winnerUserId     String?
-  createdById      String
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  winnerCompanyId  String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
-  createdBy    User                     @relation("CompetitionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  participants CompetitionParticipant[]
-  events       CompetitionEvent[]
-  jobs         Job[]
+  competition         Competition        @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  competitionAsActive Competition?       @relation("ActiveRound")
+  participants        RoundParticipant[]
+  jobs                Job[]
+  events              CompetitionEvent[]
 
-  @@index([status, scheduledStartAt])
-  @@index([status, endAt])
+  @@unique([competitionId, roundNumber])
+  @@index([competitionId, status])
 }
 
-model CompetitionParticipant {
+/// A participant within a specific round.
+/// Identity = the company (sourced from the main server) + a human-readable display name.
+model RoundParticipant {
   id              String            @id @default(uuid())
-  competitionId   String
-  userId          String
-  companyId       String?
+  roundId         String
+  companyId       String
+  displayName     String
   status          ParticipantStatus @default(REGISTERED)
   joinedAt        DateTime?
   lastHeartbeatAt DateTime?
@@ -183,32 +148,75 @@ model CompetitionParticipant {
   finalScore      Int               @default(0)
   finalRank       Int?
   scoreReachedAt  DateTime?
+  /// Timestamp of this participant's last successfully scored webhook.
+  /// Used to compute postDurationSeconds on subsequent scores.
+  lastScoredAt    DateTime?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
-  competition Competition         @relation(fields: [competitionId], references: [id], onDelete: Cascade)
-  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  company     Company?            @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  events      CompetitionEvent[]
+  round   Round             @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  company Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  events  CompetitionEvent[]
 
-  @@unique([competitionId, userId])
-  @@index([competitionId, finalScore, scoreReachedAt])
-  @@index([userId])
+  @@unique([roundId, companyId])
+  @@index([roundId, finalScore, scoreReachedAt])
+  @@index([companyId])
 }
 
-model CompetitionEvent {
-  id            String               @id @default(uuid())
-  competitionId String
-  participantId String?
-  eventType     CompetitionEventType
-  metadata      Json?
-  createdAt     DateTime             @default(now())
+/// Ledger: each external job can increment a participant's score at most once.
+/// postDurationSeconds records elapsed time since the participant's previous scored job (informational).
+model RoundJobScore {
+  id                  String   @id @default(uuid())
+  roundId             String
+  participantId       String
+  jobId               String   @unique
+  postDurationSeconds Float?
+  createdAt           DateTime @default(now())
 
-  competition Competition            @relation(fields: [competitionId], references: [id], onDelete: Cascade)
-  participant CompetitionParticipant? @relation(fields: [participantId], references: [id], onDelete: SetNull)
+  @@index([roundId, participantId])
+}
+
+/// Mirrored external job, linked to the round it was published during.
+model Job {
+  id             String    @id @default(uuid())
+  title          String
+  description    String?
+  location       String?
+  employmentType String?
+  status         JobStatus @default(DRAFT)
+  source         JobSource @default(EXTERNAL)
+  publishedAt    DateTime?
+  scoredAt       DateTime?
+  externalJobId  String?   @unique
+  companyId      String?
+  roundId        String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  round   Round?   @relation(fields: [roundId], references: [id], onDelete: SetNull)
+
+  @@index([roundId, status])
+  @@index([companyId, status])
+  @@index([source, externalJobId])
+}
+
+/// Append-only audit trail for competition and round events.
+model CompetitionEvent {
+  id                 String               @id @default(uuid())
+  competitionId      String
+  roundId            String?
+  roundParticipantId String?
+  eventType          CompetitionEventType
+  metadata           Json?
+  createdAt          DateTime             @default(now())
+
+  competition      Competition       @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  round            Round?            @relation(fields: [roundId], references: [id], onDelete: SetNull)
+  roundParticipant RoundParticipant? @relation(fields: [roundParticipantId], references: [id], onDelete: SetNull)
 
   @@index([competitionId, createdAt])
+  @@index([roundId, createdAt])
   @@index([eventType])
-  @@index([competitionId, eventType, createdAt])
-  @@index([participantId, createdAt])
+  @@index([roundParticipantId, createdAt])
 }

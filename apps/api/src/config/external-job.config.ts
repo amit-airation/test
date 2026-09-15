@@ -2,9 +2,7 @@ import type { ConfigService } from '@nestjs/config';
 import { EXTERNAL_JOB_WEBHOOK } from '../modules/live-challenge/constants.js';
 
 function parseBool(value: string | undefined, defaultValue: boolean): boolean {
-  if (value === undefined || value.trim() === '') {
-    return defaultValue;
-  }
+  if (value === undefined || value.trim() === '') return defaultValue;
   const normalized = value.trim().toLowerCase();
   if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
   if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
@@ -13,21 +11,7 @@ function parseBool(value: string | undefined, defaultValue: boolean): boolean {
 
 /** When false, POST /api/integrations/job-events returns 503. Default: enabled. */
 export function isExternalJobWebhookEnabled(config: ConfigService): boolean {
-  return parseBool(
-    config.get<string>(EXTERNAL_JOB_WEBHOOK.ENABLED_ENV),
-    true,
-  );
-}
-
-/**
- * When true, register/join require an externalUserId (or an already-linked
- * User.externalUserId). Default: false for local demos.
- */
-export function requireExternalUserIdOnJoin(config: ConfigService): boolean {
-  return parseBool(
-    config.get<string>(EXTERNAL_JOB_WEBHOOK.REQUIRE_EXTERNAL_USER_ID_ENV),
-    false,
-  );
+  return parseBool(config.get<string>(EXTERNAL_JOB_WEBHOOK.ENABLED_ENV), true);
 }
 
 export function resolveExternalJobWebhookSecret(

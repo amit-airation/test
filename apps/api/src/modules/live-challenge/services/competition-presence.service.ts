@@ -9,8 +9,8 @@ const PRESENCE_TTL_SECONDS = 45;
 const SESSION_TTL_SECONDS = 60 * 60;
 
 /**
- * Presence + single-active-session enforcement (details.md §56).
- * Redis is ephemeral only — disconnect audits still land in PostgreSQL.
+ * Redis-backed presence and single-active-session enforcement.
+ * Keyed by round + participant so each round has independent sessions.
  */
 @Injectable()
 export class CompetitionPresenceService implements OnModuleDestroy {
@@ -25,7 +25,6 @@ export class CompetitionPresenceService implements OnModuleDestroy {
     this.redis = new Redis({
       host: config.get<string>('REDIS_HOST', 'localhost'),
       port: Number(config.get<string | number>('REDIS_PORT', 6379)),
-      // Presence is ephemeral — never block scoring on a Redis backlog.
       maxRetriesPerRequest: 1,
       enableOfflineQueue: false,
       lazyConnect: true,
@@ -40,17 +39,23 @@ export class CompetitionPresenceService implements OnModuleDestroy {
     });
   }
 
-  /**
-   * Atomically swaps the active socket id and returns the previous owner.
-   * Keeps session claims race-safe under concurrent tab joins.
-   */
+  async onModuleDestroy() {
+    await this.redis.quit().catch(() => undefined);
+  }
+
+  private presenceKey(roundId: string, participantId: string) {
+    return `presence:round:${roundId}:${participantId}`;
+  }
+
+  private sessionKey(roundId: string, participantId: string) {
+    return `session:round:${roundId}:${participantId}`;
+  }
+
   private async swapSessionOwner(key: string, socketId: string) {
     return this.redis.eval(
-      `
-      local previous = redis.call('GET', KEYS[1])
-      redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
-      return previous
-      `,
+      `local p = redis.call('GET', KEYS[1])
+       redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+       return p`,
       1,
       key,
       socketId,
@@ -58,38 +63,16 @@ export class CompetitionPresenceService implements OnModuleDestroy {
     ) as Promise<string | null>;
   }
 
-  async onModuleDestroy() {
-    await this.redis.quit().catch(() => undefined);
-  }
-
-  private presenceKey(competitionId: string, participantId: string) {
-    return `presence:${competitionId}:${participantId}`;
-  }
-
-  private sessionKey(competitionId: string, participantId: string) {
-    return `session:${competitionId}:${participantId}`;
-  }
-
-  /**
-   * Claims the single active competition socket for this participant.
-   * Returns any previously owning socket id so the gateway can kick it.
-   */
+  /** Atomically claims this round's session for a socket; returns the previous owner. */
   async claimSession(
-    competitionId: string,
+    roundId: string,
     participantId: string,
     socketId: string,
   ): Promise<{ supersededSocketId: string | null }> {
-    const key = this.sessionKey(competitionId, participantId);
+    const key = this.sessionKey(roundId, participantId);
     try {
       const previous = await this.swapSessionOwner(key, socketId);
       if (previous && previous !== socketId) {
-        this.logger.log({
-          event: 'session_superseded',
-          competition_id: competitionId,
-          participant_id: participantId,
-          previous_socket_id: previous,
-          socket_id: socketId,
-        });
         return { supersededSocketId: previous };
       }
       return { supersededSocketId: null };
@@ -98,58 +81,38 @@ export class CompetitionPresenceService implements OnModuleDestroy {
         event: 'session_claim_failed',
         error: error instanceof Error ? error.message : String(error),
       });
-      // Fail open for presence infra — scoring remains authoritative in Postgres.
       return { supersededSocketId: null };
     }
   }
 
-  /**
-   * Releases the session only if this socket still owns it. Prevents a
-   * kicked tab's disconnect from clearing the newer active session.
-   */
   async releaseSession(
-    competitionId: string,
+    roundId: string,
     participantId: string,
     socketId: string,
   ): Promise<boolean> {
-    const key = this.sessionKey(competitionId, participantId);
+    const key = this.sessionKey(roundId, participantId);
     try {
       const current = await this.redis.get(key);
-      if (current && current !== socketId) {
-        return false;
-      }
-      if (current === socketId) {
-        await this.redis.del(key);
-      }
+      if (current && current !== socketId) return false;
+      if (current === socketId) await this.redis.del(key);
       return true;
-    } catch (error) {
-      this.logger.warn({
-        event: 'session_release_failed',
-        error: error instanceof Error ? error.message : String(error),
-      });
+    } catch {
       return true;
     }
   }
 
-  /**
-   * Records presence for a participant socket. Returns whether this was a
-   * reconnect, which is audited so disputes can distinguish a first join from
-   * a mid-competition drop and recovery.
-   */
   async markConnected(
     competitionId: string,
+    roundId: string,
     participantId: string,
-    userId: string,
+    companyId: string,
   ): Promise<{ reconnected: boolean }> {
-    const wasConnected = await this.isConnected(competitionId, participantId);
+    const wasConnected = await this.isConnected(roundId, participantId);
 
     try {
       await this.redis.set(
-        this.presenceKey(competitionId, participantId),
-        JSON.stringify({
-          userId,
-          connectedAt: new Date().toISOString(),
-        }),
+        this.presenceKey(roundId, participantId),
+        JSON.stringify({ companyId, connectedAt: new Date().toISOString() }),
         'EX',
         PRESENCE_TTL_SECONDS,
       );
@@ -160,30 +123,36 @@ export class CompetitionPresenceService implements OnModuleDestroy {
       });
     }
 
-    await this.prisma.competitionParticipant.update({
+    await this.prisma.roundParticipant.update({
       where: { id: participantId },
       data: { lastHeartbeatAt: new Date() },
     });
 
     const reconnected =
-      !wasConnected && (await this.lastPresenceEventWasDisconnect(participantId));
+      !wasConnected &&
+      (await this.lastPresenceEventWasDisconnect(competitionId, participantId));
 
     if (reconnected) {
       await this.audit.record({
         competitionId,
-        participantId,
+        roundId,
+        roundParticipantId: participantId,
         eventType: CompetitionEventType.RECONNECTED,
-        metadata: { userId },
+        metadata: { companyId },
       });
     }
 
     return { reconnected };
   }
 
-  private async lastPresenceEventWasDisconnect(participantId: string) {
+  private async lastPresenceEventWasDisconnect(
+    competitionId: string,
+    participantId: string,
+  ) {
     const last = await this.prisma.competitionEvent.findFirst({
       where: {
-        participantId,
+        competitionId,
+        roundParticipantId: participantId,
         eventType: {
           in: [
             CompetitionEventType.JOINED,
@@ -198,9 +167,9 @@ export class CompetitionPresenceService implements OnModuleDestroy {
     return last?.eventType === CompetitionEventType.DISCONNECTED;
   }
 
-  async heartbeat(competitionId: string, participantId: string) {
+  async heartbeat(roundId: string, participantId: string) {
     try {
-      const key = this.presenceKey(competitionId, participantId);
+      const key = this.presenceKey(roundId, participantId);
       const exists = await this.redis.exists(key);
       if (exists) {
         await this.redis.expire(key, PRESENCE_TTL_SECONDS);
@@ -213,7 +182,7 @@ export class CompetitionPresenceService implements OnModuleDestroy {
         );
       }
       await this.redis.expire(
-        this.sessionKey(competitionId, participantId),
+        this.sessionKey(roundId, participantId),
         SESSION_TTL_SECONDS,
       );
     } catch (error) {
@@ -223,7 +192,7 @@ export class CompetitionPresenceService implements OnModuleDestroy {
       });
     }
 
-    await this.prisma.competitionParticipant.update({
+    await this.prisma.roundParticipant.update({
       where: { id: participantId },
       data: { lastHeartbeatAt: new Date() },
     });
@@ -231,11 +200,12 @@ export class CompetitionPresenceService implements OnModuleDestroy {
 
   async markDisconnected(
     competitionId: string,
+    roundId: string,
     participantId: string,
     options?: { persistEvent?: boolean },
   ) {
     try {
-      await this.redis.del(this.presenceKey(competitionId, participantId));
+      await this.redis.del(this.presenceKey(roundId, participantId));
     } catch (error) {
       this.logger.warn({
         event: 'presence_mark_disconnected_failed',
@@ -246,18 +216,17 @@ export class CompetitionPresenceService implements OnModuleDestroy {
     if (options?.persistEvent) {
       await this.audit.record({
         competitionId,
-        participantId,
+        roundId,
+        roundParticipantId: participantId,
         eventType: CompetitionEventType.DISCONNECTED,
       });
     }
   }
 
-  async isConnected(competitionId: string, participantId: string) {
+  async isConnected(roundId: string, participantId: string) {
     try {
       return (
-        (await this.redis.exists(
-          this.presenceKey(competitionId, participantId),
-        )) === 1
+        (await this.redis.exists(this.presenceKey(roundId, participantId))) === 1
       );
     } catch {
       return false;
