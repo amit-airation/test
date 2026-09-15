@@ -80,6 +80,7 @@ if ($Mode -eq "standalone") {
     "--email", $Email,
     "--agree-tos",
     "--non-interactive",
+    "--expand",
     "--keep-until-expiring"
   ) + $stagingArgs
 
@@ -102,6 +103,7 @@ else {
     "--email", $Email,
     "--agree-tos",
     "--non-interactive",
+    "--expand",
     "--keep-until-expiring"
   ) + $stagingArgs
 

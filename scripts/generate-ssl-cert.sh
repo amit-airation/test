@@ -117,6 +117,7 @@ if [[ "${MODE}" == "standalone" ]]; then
     --email "${EMAIL}" \
     --agree-tos \
     --non-interactive \
+    --expand \
     --keep-until-expiring \
     ${STAGING_ARGS[@]+"${STAGING_ARGS[@]}"}
 
@@ -135,6 +136,7 @@ else
     --email "${EMAIL}" \
     --agree-tos \
     --non-interactive \
+    --expand \
     --keep-until-expiring \
     ${STAGING_ARGS[@]+"${STAGING_ARGS[@]}"}
 fi
