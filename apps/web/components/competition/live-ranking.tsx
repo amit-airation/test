@@ -1,21 +1,13 @@
 'use client';
 
-type Entry = {
-  rank: number;
-  user_id: string;
-  name: string;
-  score: number;
-};
+import type { LeaderboardEntry } from '@/lib/competition/types';
 
 type LiveRankingProps = {
-  participants: Entry[];
-  highlightedUserId?: string;
+  participants: LeaderboardEntry[];
+  highlightedCompanyId?: string;
 };
 
-export function LiveRanking({
-  participants,
-  highlightedUserId,
-}: LiveRankingProps) {
+export function LiveRanking({ participants, highlightedCompanyId }: LiveRankingProps) {
   return (
     <section className="rounded-3xl border border-border bg-surface p-5 sm:p-7">
       <div className="flex items-center justify-between gap-4">
@@ -23,8 +15,7 @@ export function LiveRanking({
           Live ranking
         </h2>
         <p className="text-sm text-muted-text">
-          {participants.length} participant
-          {participants.length === 1 ? '' : 's'}
+          {participants.length} participant{participants.length === 1 ? '' : 's'}
         </p>
       </div>
 
@@ -34,11 +25,11 @@ export function LiveRanking({
             Scores will appear when participants publish jobs.
           </li>
         ) : (
-          participants.map((participant) => {
-            const highlighted = participant.user_id === highlightedUserId;
+          participants.map((p) => {
+            const highlighted = p.company_id === highlightedCompanyId;
             return (
               <li
-                key={participant.user_id}
+                key={p.company_id}
                 className={`flex items-center gap-4 rounded-2xl border px-4 py-3 ${
                   highlighted
                     ? 'live-score-highlight border-border'
@@ -46,13 +37,13 @@ export function LiveRanking({
                 }`}
               >
                 <span className="w-10 shrink-0 font-mono text-xl font-semibold tabular-nums text-muted-text">
-                  #{participant.rank}
+                  #{p.rank}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-lg font-medium text-foreground sm:text-xl">
-                  {participant.name}
+                  {p.display_name}
                 </span>
                 <span className="font-mono text-2xl font-semibold tabular-nums text-foreground">
-                  {participant.score}
+                  {p.score}
                 </span>
                 <span className="sr-only">published jobs</span>
               </li>

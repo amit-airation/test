@@ -1,193 +1,126 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
-import {
-  CompetitionEventType,
-  CompetitionStatus,
-  ParticipantStatus,
-} from '../../../generated/prisma/client.js';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { CompetitionStatus } from '../../../generated/prisma/client.js';
 import { WS_EVENTS } from '../ws-events.js';
 import { CompetitionService } from './competition.service.js';
 
-const COMPETITION_ID = 'c1';
+const COMPETITION_ID = '11111111-1111-1111-1111-111111111111';
+const ROUND_ID = '22222222-2222-2222-2222-222222222222';
 
-function build(options: {
-  competition?: Record<string, unknown>;
-  participant?: Record<string, unknown> | null;
-}) {
-  const tx = {
-    competitionParticipant: {
-      update: vi.fn((args: any) =>
-        Promise.resolve({
-          id: 'p1',
-          userId: 'u1',
-          status: args.data.status,
-          user: { id: 'u1', name: 'Ada' },
+describe('CompetitionService', () => {
+  let service: CompetitionService;
+  let prisma: any;
+  let realtime: any;
+
+  beforeEach(() => {
+    prisma = {
+      competition: {
+        create: vi.fn(() =>
+          Promise.resolve({
+            id: COMPETITION_ID,
+            name: 'Test Competition',
+            status: CompetitionStatus.DRAFT,
+          }),
+        ),
+        findUnique: vi.fn((args: any) => {
+          if (args.where.id === COMPETITION_ID) {
+            return Promise.resolve({
+              id: COMPETITION_ID,
+              name: 'Test Competition',
+              status: CompetitionStatus.DRAFT,
+              activeRoundId: ROUND_ID,
+              rounds: [],
+            });
+          }
+          return Promise.resolve(null);
         }),
-      ),
-    },
-    competitionEvent: { create: vi.fn(() => Promise.resolve({})) },
-  };
-  const prisma = {
-    competition: {
-      findUnique: vi.fn(() =>
-        Promise.resolve({
-          id: COMPETITION_ID,
-          status: CompetitionStatus.LIVE,
-          allowOpenJoin: false,
-          durationSeconds: 300,
-          ...options.competition,
-        }),
-      ),
-    },
-    competitionParticipant: {
-      findUnique: vi.fn(() => Promise.resolve(options.participant ?? null)),
-      create: vi.fn(() => Promise.resolve({ id: 'p-new' })),
-    },
-    companyMembership: {
-      findFirst: vi.fn(() => Promise.resolve({ companyId: 'co1' })),
-      findUnique: vi.fn(() => Promise.resolve({ companyId: 'co1' })),
-    },
-    user: { update: vi.fn(() => Promise.resolve({})) },
-    $transaction: vi.fn((fn: any) => fn(tx)),
-  };
-  const realtime = { emitPresence: vi.fn() };
-  const audit = { record: vi.fn(() => Promise.resolve({})), list: vi.fn() };
-  const service = new CompetitionService(
-    prisma as never,
-    {} as never,
-    { getLeaderboard: vi.fn() } as never,
-    { buildSnapshot: vi.fn(() => ({})) } as never,
-    realtime as never,
-    audit as never,
-    { kickPublisher: vi.fn(() => Promise.resolve()) } as never,
-    { get: () => undefined } as never,
-  );
-  return { service, prisma, tx, realtime, audit };
-}
-
-describe('CompetitionService.join', () => {
-  it('refuses a stranger when the roster is closed', async () => {
-    const { service, prisma } = build({ participant: null });
-
-    await expect(
-      service.join(COMPETITION_ID, 'u1', {}),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-    expect(prisma.competitionParticipant.create).not.toHaveBeenCalled();
-  });
-
-  it('admits a stranger only when the admin opted into open join', async () => {
-    const { service, prisma } = build({
-      competition: { allowOpenJoin: true },
-      participant: null,
-    });
-
-    await service.join(COMPETITION_ID, 'u1', {});
-    expect(prisma.competitionParticipant.create).toHaveBeenCalled();
-  });
-
-  it('admits a pre-registered participant on a closed roster', async () => {
-    const { service, prisma, tx } = build({
-      participant: {
-        id: 'p1',
-        joinedAt: null,
-        companyId: 'co1',
-        status: ParticipantStatus.REGISTERED,
+        update: vi.fn((args: any) =>
+          Promise.resolve({
+            id: COMPETITION_ID,
+            activeRoundId: args.data.activeRoundId,
+            status: args.data.status ?? CompetitionStatus.DRAFT,
+          }),
+        ),
       },
-    });
-
-    const result = await service.join(COMPETITION_ID, 'u1', {});
-
-    expect(prisma.competitionParticipant.create).not.toHaveBeenCalled();
-    expect(result.status).toBe(ParticipantStatus.ACTIVE);
-    expect(tx.competitionEvent.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          eventType: CompetitionEventType.JOINED,
+      round: {
+        findUnique: vi.fn((args: any) => {
+          if (args.where.id === ROUND_ID) {
+            return Promise.resolve({
+              id: ROUND_ID,
+              competitionId: COMPETITION_ID,
+              roundNumber: 1,
+              name: 'Round 1',
+              status: 'LIVE',
+            });
+          }
+          return Promise.resolve(null);
         }),
+      },
+      competitionEvent: {
+        create: vi.fn(() => Promise.resolve({})),
+      },
+      $transaction: vi.fn((fn: any) => fn(prisma)),
+    };
+
+    realtime = {
+      emitActiveRoundChanged: vi.fn(),
+    };
+
+    const leaderboard = {
+      getLeaderboard: vi.fn(() => Promise.resolve({ participants: [] })),
+    };
+
+    const timer = {
+      buildSnapshot: vi.fn(() => ({ time_remaining_seconds: 300 })),
+    };
+
+    service = new CompetitionService(
+      prisma as never,
+      realtime as never,
+      leaderboard as never,
+      timer as never,
+    );
+  });
+
+  it('creates a competition container', async () => {
+    const created = await service.create({ name: 'Test Competition' });
+    expect(created.id).toBe(COMPETITION_ID);
+    expect(prisma.competition.create).toHaveBeenCalled();
+  });
+
+  it('finds a competition by id', async () => {
+    const comp = await service.findOne(COMPETITION_ID);
+    expect(comp.id).toBe(COMPETITION_ID);
+  });
+
+  it('throws NotFoundException for non-existent competition', async () => {
+    await expect(service.findOne('non-existent')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('sets active round and emits active round changed event', async () => {
+    await service.setActiveRound(COMPETITION_ID, ROUND_ID);
+    expect(prisma.competition.update).toHaveBeenCalledWith({
+      where: { id: COMPETITION_ID },
+      data: { activeRoundId: ROUND_ID },
+    });
+    expect(realtime.emitActiveRoundChanged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: WS_EVENTS.ACTIVE_ROUND_CHANGED,
+        competition_id: COMPETITION_ID,
+        active_round_id: ROUND_ID,
       }),
     );
   });
 
-  it('refuses a disqualified participant', async () => {
-    const { service } = build({
-      participant: { id: 'p1', status: ParticipantStatus.DISQUALIFIED },
+  it('throws BadRequestException if setting active round from another competition', async () => {
+    prisma.round.findUnique.mockResolvedValueOnce({
+      id: 'other-round',
+      competitionId: 'other-competition',
     });
 
     await expect(
-      service.join(COMPETITION_ID, 'u1', {}),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-  });
-});
-
-describe('CompetitionService.disqualifyParticipant', () => {
-  it('records the sanction with its reason and broadcasts it', async () => {
-    const { service, tx, realtime } = build({
-      participant: {
-        id: 'p1',
-        competitionId: COMPETITION_ID,
-        userId: 'u1',
-        status: ParticipantStatus.ACTIVE,
-        user: { id: 'u1', name: 'Ada' },
-      },
-    });
-
-    await service.disqualifyParticipant(
-      COMPETITION_ID,
-      'p1',
-      'Third-party assistance',
-      'admin-1',
-    );
-
-    expect(tx.competitionEvent.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          eventType: CompetitionEventType.DISQUALIFIED,
-          metadata: {
-            reason: 'Third-party assistance',
-            disqualifiedBy: 'admin-1',
-          },
-        }),
-      }),
-    );
-    expect(realtime.emitPresence).toHaveBeenCalledWith(
-      COMPETITION_ID,
-      WS_EVENTS.PARTICIPANT_DISQUALIFIED,
-      expect.objectContaining({ participant_id: 'p1' }),
-    );
-  });
-
-  it('refuses a participant id from another competition', async () => {
-    const { service } = build({
-      participant: {
-        id: 'p1',
-        competitionId: 'other-competition',
-        userId: 'u1',
-        status: ParticipantStatus.ACTIVE,
-        user: { id: 'u1', name: 'Ada' },
-      },
-    });
-
-    await expect(
-      service.disqualifyParticipant(COMPETITION_ID, 'p1', 'reason', 'admin-1'),
-    ).rejects.toBeInstanceOf(NotFoundException);
-  });
-
-  it('is idempotent for an already disqualified participant', async () => {
-    const { service, tx } = build({
-      participant: {
-        id: 'p1',
-        competitionId: COMPETITION_ID,
-        userId: 'u1',
-        status: ParticipantStatus.DISQUALIFIED,
-        user: { id: 'u1', name: 'Ada' },
-      },
-    });
-
-    await service.disqualifyParticipant(
-      COMPETITION_ID,
-      'p1',
-      'reason',
-      'admin-1',
-    );
-    expect(tx.competitionEvent.create).not.toHaveBeenCalled();
+      service.setActiveRound(COMPETITION_ID, 'other-round'),
+    ).rejects.toThrow(BadRequestException);
   });
 });

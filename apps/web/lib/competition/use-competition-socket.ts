@@ -4,96 +4,125 @@ import { useEffect, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import {
   fetchCompetitionSnapshot,
-  fetchLeaderboard,
-  fetchMyCompetitionState,
+  fetchRoundLeaderboard,
+  fetchRoundMe,
 } from './api';
 import {
   getCompetitionSocket,
   joinCompetitionRoom,
+  joinRoundRoom,
   leaveCompetitionRoom,
   sendHeartbeat,
 } from './socket';
 import {
   WS_EVENTS,
+  type ActiveRoundChangedEvent,
+  type CompetitionStateEvent,
+  type LeaderboardEntry,
   type LeaderboardUpdatedEvent,
+  type RecentJob,
   type ScoreUpdatedEvent,
   type TimerSnapshot,
 } from './types';
 
 type UseCompetitionSocketOptions = {
   competitionId: string;
-  token: string | null;
-  userId?: string | null;
+  companyId?: string | null;
+  displayName?: string;
   enabled?: boolean;
 };
 
-/**
- * Client-only competition realtime hook.
- * On reconnect: HTTP snapshot first, then resume live events.
- */
 export function useCompetitionSocket({
   competitionId,
-  token,
-  userId,
+  companyId,
+  displayName,
   enabled = true,
 }: UseCompetitionSocketOptions) {
   const socketRef = useRef<Socket | null>(null);
   const sessionSupersededRef = useRef(false);
+
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [sessionSuperseded, setSessionSuperseded] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+
+  // Competition-level state
   const [competitionName, setCompetitionName] = useState<string | null>(null);
+  const [competitionStatus, setCompetitionStatus] = useState<string | null>(null);
+  const [allRounds, setAllRounds] = useState<
+    Array<{ id: string; round_number: number; name: string | null; status: string }>
+  >([]);
+
+  // Active round state
+  const [activeRoundId, setActiveRoundId] = useState<string | null>(null);
+  const [roundStatus, setRoundStatus] = useState<string | null>(null);
+  const [roundNumber, setRoundNumber] = useState<number | null>(null);
+  const [roundName, setRoundName] = useState<string | null>(null);
   const [timer, setTimer] = useState<TimerSnapshot | null>(null);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+
+  // Participant state
   const [myScore, setMyScore] = useState<number | null>(null);
   const [myRank, setMyRank] = useState<number | null>(null);
   const [participantId, setParticipantId] = useState<string | null>(null);
   const [participantStatus, setParticipantStatus] = useState<string | null>(null);
-  const [companyId, setCompanyId] = useState<string | null>(null);
-  const [externalUserId, setExternalUserId] = useState<string | null | undefined>(
-    undefined,
-  );
-  const [leaderboard, setLeaderboard] = useState<
-    LeaderboardUpdatedEvent['participants']
-  >([]);
-  const [lastScoreEvent, setLastScoreEvent] = useState<ScoreUpdatedEvent | null>(
-    null,
-  );
-  const [recentJobs, setRecentJobs] = useState<
-    Array<{ id: string; title: string; publishedAt: string }>
-  >([]);
+
+  const [lastScoreEvent, setLastScoreEvent] = useState<ScoreUpdatedEvent | null>(null);
+  const [recentJobs, setRecentJobs] = useState<RecentJob[]>([]);
+
+  // Tracks which roundId we're currently joined to via WS
+  const joinedRoundRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!enabled || !token || !competitionId) {
-      return;
-    }
+    if (!enabled || !competitionId) return;
 
-    const socket = getCompetitionSocket(token);
+    const socket = getCompetitionSocket();
     socketRef.current = socket;
 
-    const restoreFromHttp = async () => {
+    const restoreFromHttp = async (roundId: string | null) => {
       try {
-        const [snapshot, me, board] = await Promise.all([
-          fetchCompetitionSnapshot(competitionId, token),
-          fetchMyCompetitionState(competitionId, token).catch(() => null),
-          fetchLeaderboard(competitionId, token),
-        ]);
+        const snapshot = await fetchCompetitionSnapshot(competitionId);
         setCompetitionName(snapshot.name);
-        setStatus(snapshot.status);
-        setTimer(snapshot.timer as TimerSnapshot);
+        setCompetitionStatus(snapshot.status);
+        setAllRounds(
+          snapshot.rounds.map((r) => ({
+            id: r.id,
+            round_number: r.roundNumber,
+            name: r.name,
+            status: r.status,
+          })),
+        );
+
+        const effectiveRoundId = roundId ?? snapshot.activeRoundId;
+        if (!effectiveRoundId) return;
+
+        const [board, me] = await Promise.all([
+          fetchRoundLeaderboard(competitionId, effectiveRoundId),
+          companyId
+            ? fetchRoundMe(competitionId, effectiveRoundId, companyId).catch(
+                () => null,
+              )
+            : Promise.resolve(null),
+        ]);
+
+        setLeaderboard(board.participants);
+        setRoundStatus(board.status);
+        setTimer(board.timer);
+
         if (me) {
           setMyScore(me.my_score);
           setMyRank(me.my_rank);
-          setTimer(me.timer as TimerSnapshot);
           setParticipantId(me.participant.id);
           setParticipantStatus(me.participant.status);
-          setCompanyId(me.participant.companyId);
-          setExternalUserId(me.external_user_id);
         }
-        setLeaderboard(board.participants);
       } catch {
-        // Snapshot restore is best-effort; live events may still arrive.
+        // Snapshot restore is best-effort
       }
+    };
+
+    const joinRound = async (roundId: string) => {
+      if (joinedRoundRef.current === roundId) return;
+      joinedRoundRef.current = roundId;
+      await joinRoundRoom(socket, competitionId, roundId, companyId ?? undefined);
     };
 
     const onConnect = async () => {
@@ -101,12 +130,19 @@ export function useCompetitionSocket({
       setConnected(true);
       setReconnecting(false);
       setSessionSuperseded(false);
-      await restoreFromHttp();
-      await joinCompetitionRoom(socket, competitionId);
+
+      await restoreFromHttp(null);
+      await joinCompetitionRoom(
+        socket,
+        competitionId,
+        companyId ?? undefined,
+        displayName,
+      );
     };
 
     const onDisconnect = () => {
       setConnected(false);
+      joinedRoundRef.current = null;
       if (!sessionSupersededRef.current) {
         setReconnecting(true);
       }
@@ -121,86 +157,126 @@ export function useCompetitionSocket({
       socket.disconnect();
     };
 
-    socket.on('connect', onConnect);
-    socket.on('disconnect', onDisconnect);
-    socket.on(WS_EVENTS.SESSION_SUPERSEDED, onSessionSuperseded);
-    socket.on(
-      WS_EVENTS.COMPETITION_STATE,
-      (payload: { status: string; timer?: TimerSnapshot }) => {
-        setStatus(payload.status);
+    const onCompetitionState = async (payload: CompetitionStateEvent) => {
+      setCompetitionStatus(payload.status);
+      if (payload.rounds) setAllRounds(payload.rounds);
+      if (payload.active_round_id) {
+        setActiveRoundId(payload.active_round_id);
+        if (payload.round) {
+          setRoundStatus(payload.round.status);
+          setRoundNumber(payload.round.round_number);
+          setRoundName(payload.round.name);
+          if (payload.round.timer) setTimer(payload.round.timer);
+        }
+        await joinRound(payload.active_round_id);
+      }
+    };
+
+    const onActiveRoundChanged = async (payload: ActiveRoundChangedEvent) => {
+      const newRoundId = payload.active_round_id;
+      setActiveRoundId(newRoundId);
+
+      if (payload.round) {
+        setRoundStatus(payload.round.status);
+        setRoundNumber(payload.round.round_number);
+        setRoundName(payload.round.name);
+        if (payload.round.timer) setTimer(payload.round.timer);
+      }
+
+      // Reset per-round state
+      setMyScore(null);
+      setMyRank(null);
+      setParticipantId(null);
+      setParticipantStatus(null);
+      setLeaderboard([]);
+      setLastScoreEvent(null);
+      setRecentJobs([]);
+      joinedRoundRef.current = null;
+
+      if (newRoundId) {
+        await restoreFromHttp(newRoundId);
+        await joinRound(newRoundId);
+      }
+    };
+
+    const onRoundLifecycle = (payload: {
+      status: string;
+      round_id: string;
+      timer?: TimerSnapshot;
+    }) => {
+      if (payload.round_id === activeRoundId || !activeRoundId) {
+        setRoundStatus(payload.status);
         if (payload.timer) setTimer(payload.timer);
-      },
-    );
-    socket.on(
-      WS_EVENTS.COMPETITION_STARTED,
-      (payload: { status: string; timer?: TimerSnapshot }) => {
-        setStatus(payload.status);
-        if (payload.timer) setTimer(payload.timer);
-      },
-    );
-    socket.on(
-      WS_EVENTS.COMPETITION_ENDED,
-      (payload: { status: string; timer?: TimerSnapshot }) => {
-        setStatus(payload.status);
-        if (payload.timer) setTimer(payload.timer);
-      },
-    );
-    socket.on(WS_EVENTS.COMPETITION_FINALIZED, (payload: { status: string }) => {
-      setStatus(payload.status);
-    });
-    socket.on(WS_EVENTS.SCORE_UPDATED, (payload: ScoreUpdatedEvent) => {
+      }
+    };
+
+    const onScoreUpdated = (payload: ScoreUpdatedEvent) => {
       setLastScoreEvent(payload);
-      if (userId && payload.participant.user_id === userId) {
+      if (companyId && payload.participant.company_id === companyId) {
         setMyScore(payload.score);
         if (payload.rank != null) setMyRank(payload.rank);
       }
-    });
-    socket.on(
-      WS_EVENTS.JOB_PUBLISHED,
-      (payload: {
-        job_id: string;
-        user_id: string;
-        competition_id: string;
-      }) => {
-        if (userId && payload.user_id === userId) {
-          setRecentJobs((prev) => {
-            if (prev.some((j) => j.id === payload.job_id)) return prev;
-            return [
-              {
-                id: payload.job_id,
-                title: 'Published job',
-                publishedAt: new Date().toISOString(),
-              },
-              ...prev,
-            ].slice(0, 10);
-          });
+    };
+
+    const onJobPublished = (payload: {
+      job_id: string;
+      company_id: string;
+      round_id: string;
+      post_duration_seconds: number | null;
+    }) => {
+      if (companyId && payload.company_id === companyId) {
+        setRecentJobs((prev) => {
+          if (prev.some((j) => j.id === payload.job_id)) return prev;
+          return [
+            {
+              id: payload.job_id,
+              title: 'Published job',
+              publishedAt: new Date().toISOString(),
+              postDurationSeconds: payload.post_duration_seconds,
+            },
+            ...prev,
+          ].slice(0, 10);
+        });
+      }
+    };
+
+    const onLeaderboardUpdated = (payload: LeaderboardUpdatedEvent) => {
+      if (payload.round_id !== joinedRoundRef.current && joinedRoundRef.current) return;
+      setLeaderboard(payload.participants);
+      setRoundStatus(payload.status);
+      setTimer(payload.timer);
+      if (companyId) {
+        const me = payload.participants.find((p) => p.company_id === companyId);
+        if (me) {
+          setMyScore(me.score);
+          setMyRank(me.rank);
         }
-      },
-    );
-    socket.on(
-      WS_EVENTS.LEADERBOARD_UPDATED,
-      (payload: LeaderboardUpdatedEvent) => {
-        setLeaderboard(payload.participants);
-        setStatus(payload.status);
-        setTimer(payload.timer);
-        if (userId) {
-          const me = payload.participants.find((p) => p.user_id === userId);
-          if (me) {
-            setMyScore(me.score);
-            setMyRank(me.rank);
-          }
-        }
-      },
-    );
-    socket.on(
-      WS_EVENTS.RANK_CHANGED,
-      (payload: { user_id: string; rank: number; score: number }) => {
-        if (userId && payload.user_id === userId) {
-          setMyRank(payload.rank);
-          setMyScore(payload.score);
-        }
-      },
-    );
+      }
+    };
+
+    const onRankChanged = (payload: {
+      company_id: string;
+      rank: number;
+      score: number;
+    }) => {
+      if (companyId && payload.company_id === companyId) {
+        setMyRank(payload.rank);
+        setMyScore(payload.score);
+      }
+    };
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+    socket.on(WS_EVENTS.SESSION_SUPERSEDED, onSessionSuperseded);
+    socket.on(WS_EVENTS.COMPETITION_STATE, onCompetitionState);
+    socket.on(WS_EVENTS.ACTIVE_ROUND_CHANGED, onActiveRoundChanged);
+    socket.on(WS_EVENTS.ROUND_STARTED, onRoundLifecycle);
+    socket.on(WS_EVENTS.ROUND_ENDED, onRoundLifecycle);
+    socket.on(WS_EVENTS.ROUND_FINALIZED, onRoundLifecycle);
+    socket.on(WS_EVENTS.SCORE_UPDATED, onScoreUpdated);
+    socket.on(WS_EVENTS.JOB_PUBLISHED, onJobPublished);
+    socket.on(WS_EVENTS.LEADERBOARD_UPDATED, onLeaderboardUpdated);
+    socket.on(WS_EVENTS.RANK_CHANGED, onRankChanged);
 
     if (socket.connected) {
       void onConnect();
@@ -209,8 +285,8 @@ export function useCompetitionSocket({
     }
 
     const heartbeat = window.setInterval(() => {
-      if (socket.connected) {
-        void sendHeartbeat(socket, competitionId);
+      if (socket.connected && joinedRoundRef.current) {
+        void sendHeartbeat(socket, joinedRoundRef.current);
       }
     }, 12_000);
 
@@ -219,41 +295,38 @@ export function useCompetitionSocket({
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off(WS_EVENTS.SESSION_SUPERSEDED, onSessionSuperseded);
+      socket.off(WS_EVENTS.COMPETITION_STATE, onCompetitionState);
+      socket.off(WS_EVENTS.ACTIVE_ROUND_CHANGED, onActiveRoundChanged);
+      socket.off(WS_EVENTS.ROUND_STARTED, onRoundLifecycle);
+      socket.off(WS_EVENTS.ROUND_ENDED, onRoundLifecycle);
+      socket.off(WS_EVENTS.ROUND_FINALIZED, onRoundLifecycle);
+      socket.off(WS_EVENTS.SCORE_UPDATED, onScoreUpdated);
+      socket.off(WS_EVENTS.JOB_PUBLISHED, onJobPublished);
+      socket.off(WS_EVENTS.LEADERBOARD_UPDATED, onLeaderboardUpdated);
+      socket.off(WS_EVENTS.RANK_CHANGED, onRankChanged);
       void leaveCompetitionRoom(socket);
     };
-  }, [competitionId, token, userId, enabled]);
-
-  const prependRecentJob = (job: {
-    id: string;
-    title: string;
-    publishedAt: string;
-  }) => {
-    setRecentJobs((prev) => {
-      if (prev.some((j) => j.id === job.id)) return prev;
-      return [job, ...prev].slice(0, 10);
-    });
-  };
+  }, [competitionId, companyId, displayName, enabled]);
 
   return {
+    socketRef,
     connected,
     reconnecting,
     sessionSuperseded,
-    status,
     competitionName,
+    competitionStatus,
+    allRounds,
+    activeRoundId,
+    roundStatus,
+    roundNumber,
+    roundName,
     timer,
+    leaderboard,
     myScore,
     myRank,
     participantId,
     participantStatus,
-    companyId,
-    externalUserId,
-    setCompanyId,
-    leaderboard,
     lastScoreEvent,
     recentJobs,
-    prependRecentJob,
-    setMyScore,
-    setMyRank,
-    socket: socketRef,
   };
 }

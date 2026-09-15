@@ -1,7 +1,4 @@
-import {
-  assertSecureRuntimeConfig,
-  resolveJwtSecret,
-} from './security.config.js';
+import { assertSecureRuntimeConfig } from './security.config.js';
 
 const STRONG = 'x'.repeat(40);
 
@@ -11,43 +8,11 @@ function configFor(values: Record<string, string | undefined>) {
   } as never;
 }
 
-describe('resolveJwtSecret', () => {
-  it('refuses to boot production on a well-known secret', () => {
-    expect(() =>
-      resolveJwtSecret(
-        configFor({ NODE_ENV: 'production', JWT_SECRET: 'change-me' }),
-      ),
-    ).toThrow(/JWT_SECRET/);
-  });
-
-  it('refuses to boot production on a short secret', () => {
-    expect(() =>
-      resolveJwtSecret(
-        configFor({ NODE_ENV: 'production', JWT_SECRET: 'short-secret' }),
-      ),
-    ).toThrow(/JWT_SECRET/);
-  });
-
-  it('accepts a strong production secret', () => {
-    expect(
-      resolveJwtSecret(
-        configFor({ NODE_ENV: 'production', JWT_SECRET: STRONG }),
-      ),
-    ).toBe(STRONG);
-  });
-
-  it('keeps development usable with a weak secret', () => {
-    expect(
-      resolveJwtSecret(configFor({ JWT_SECRET: 'change-me' })),
-    ).toBe('change-me');
-    expect(resolveJwtSecret(configFor({}))).toBeTruthy();
-  });
-});
-
 describe('assertSecureRuntimeConfig', () => {
   const productionBase = {
     NODE_ENV: 'production',
-    JWT_SECRET: STRONG,
+    EVENT_ACCESS_KEY: STRONG,
+    ADMIN_KEY: STRONG,
     CORS_ORIGIN: 'https://live.hirance.test',
     EXTERNAL_JOB_WEBHOOK_SECRET: STRONG,
   };
@@ -66,17 +31,17 @@ describe('assertSecureRuntimeConfig', () => {
     ).toThrow(/CORS_ORIGIN/);
   });
 
-  it('rejects a short admin bootstrap token', () => {
+  it('rejects missing or short EVENT_ACCESS_KEY in production', () => {
     expect(() =>
       assertSecureRuntimeConfig(
-        configFor({ ...productionBase, ADMIN_BOOTSTRAP_TOKEN: 'abc' }),
+        configFor({ ...productionBase, EVENT_ACCESS_KEY: 'short' }),
       ),
-    ).toThrow(/ADMIN_BOOTSTRAP_TOKEN/);
+    ).toThrow(/EVENT_ACCESS_KEY/);
   });
 
   it('skips production-only checks in development', () => {
     expect(() =>
-      assertSecureRuntimeConfig(configFor({ JWT_SECRET: 'change-me' })),
+      assertSecureRuntimeConfig(configFor({})),
     ).not.toThrow();
   });
 });

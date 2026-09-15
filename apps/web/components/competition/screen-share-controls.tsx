@@ -16,9 +16,11 @@ import { reportScreenShare } from '@/lib/competition/socket';
 
 type ScreenShareControlsProps = {
   competitionId: string;
-  token: string;
-  status: string | null;
+  roundId: string | null;
+  roundStatus: string | null;
   participantStatus?: string | null;
+  companyId?: string | null;
+  displayName?: string;
   socket: Socket | null;
 };
 
@@ -29,50 +31,49 @@ type ShareState =
   | 'requesting'
   | 'sharing'
   | 'denied'
-  | 'error'
-  | 'ended';
+  | 'error';
 
 export function ScreenShareControls({
   competitionId,
-  token,
-  status,
+  roundId,
+  roundStatus,
   participantStatus,
+  companyId,
+  displayName = 'Participant',
   socket,
 }: ScreenShareControlsProps) {
   const roomRef = useRef<Room | null>(null);
   const [state, setState] = useState<ShareState>('checking');
   const [message, setMessage] = useState<string | null>(null);
 
-  const live = status === 'LIVE';
+  const live = roundStatus === 'LIVE';
   const disqualified = participantStatus === 'DISQUALIFIED';
 
   useEffect(() => {
+    if (!roundId) {
+      setState('unavailable');
+      return;
+    }
     let cancelled = false;
-    void fetchScreenShareStatus(competitionId, token)
+    void fetchScreenShareStatus(competitionId, roundId)
       .then((result) => {
-        if (!cancelled) {
-          setState(result.configured ? 'idle' : 'unavailable');
-        }
+        if (!cancelled) setState(result.configured ? 'idle' : 'unavailable');
       })
       .catch(() => {
         if (!cancelled) setState('unavailable');
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [competitionId, token]);
+    return () => { cancelled = true; };
+  }, [competitionId, roundId]);
 
   useEffect(() => {
-    if (!live || disqualified || state === 'ended') {
+    if (!live || disqualified) {
       void stopSharing(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, disqualified]);
 
   useEffect(() => {
-    return () => {
-      void stopSharing(false);
-    };
+    return () => { void stopSharing(false); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -82,48 +83,47 @@ export function ScreenShareControls({
     if (room) {
       try {
         await room.localParticipant.setScreenShareEnabled(false);
-      } catch {
-        // already stopped
-      }
+      } catch { /* already stopped */ }
       room.disconnect();
     }
-    if (audit && socket) {
-      void reportScreenShare(socket, false);
+    if (audit && socket && roundId) {
+      void reportScreenShare(socket, false, roundId);
     }
   };
 
   const startSharing = async () => {
+    if (!roundId) return;
     setMessage(null);
     setState('requesting');
     try {
-      const creds = await fetchScreenShareToken(competitionId, token, 'publish');
+      const creds = await fetchScreenShareToken(
+        competitionId,
+        roundId,
+        'publish',
+        companyId ?? undefined,
+        displayName,
+      );
       const room = new Room({ adaptiveStream: true, dynacast: true });
       roomRef.current = room;
 
       room.on(RoomEvent.ConnectionStateChanged, (next) => {
-        if (next === ConnectionState.Reconnecting) {
-          setMessage('Reconnecting screen share…');
-        }
-        if (next === ConnectionState.Connected) {
-          setMessage(null);
-        }
+        if (next === ConnectionState.Reconnecting) setMessage('Reconnecting screen share…');
+        if (next === ConnectionState.Connected) setMessage(null);
         if (next === ConnectionState.Disconnected && roomRef.current === room) {
-          setState((current) => (current === 'sharing' ? 'idle' : current));
+          setState((s) => (s === 'sharing' ? 'idle' : s));
         }
       });
-      room.on(RoomEvent.LocalTrackUnpublished, (publication) => {
-        if (publication.source === Track.Source.ScreenShare) {
+      room.on(RoomEvent.LocalTrackUnpublished, (pub) => {
+        if (pub.source === Track.Source.ScreenShare) {
           setState('idle');
-          if (socket) void reportScreenShare(socket, false);
+          if (socket && roundId) void reportScreenShare(socket, false, roundId);
         }
       });
 
       await room.connect(creds.url, creds.token);
-      await room.localParticipant.setScreenShareEnabled(true, {
-        audio: true,
-      });
+      await room.localParticipant.setScreenShareEnabled(true, { audio: true });
       setState('sharing');
-      if (socket) void reportScreenShare(socket, true);
+      if (socket && roundId) void reportScreenShare(socket, true, roundId);
     } catch (error) {
       await stopSharing(false);
       const text = error instanceof Error ? error.message : 'Screen share failed';
@@ -132,26 +132,13 @@ export function ScreenShareControls({
         setMessage('Screen share permission was denied.');
         return;
       }
-      if (/unavailable/i.test(text)) {
-        setState('unavailable');
-        return;
-      }
+      if (/unavailable/i.test(text)) { setState('unavailable'); return; }
       setState('error');
       setMessage(text);
     }
   };
 
-  if (state === 'checking') {
-    return null;
-  }
-
-  if (state === 'unavailable') {
-    return (
-      <p className="text-sm text-muted-text" role="status">
-        Screen share unavailable.
-      </p>
-    );
-  }
+  if (state === 'checking' || state === 'unavailable') return null;
 
   if (disqualified) {
     return (
@@ -164,7 +151,7 @@ export function ScreenShareControls({
   if (!live) {
     return (
       <p className="text-sm text-muted-text" role="status">
-        Screen sharing is available while the competition is LIVE.
+        Screen sharing is available while the round is LIVE.
       </p>
     );
   }
@@ -177,14 +164,11 @@ export function ScreenShareControls({
         </p>
       ) : (
         <p className="text-sm text-muted-text">
-          Share your job-creation screen with observers. This never changes
-          your score.
+          Share your screen with observers. This never affects your score.
         </p>
       )}
       {message ? (
-        <p className="text-sm text-warning" role="alert">
-          {message}
-        </p>
+        <p className="text-sm text-warning" role="alert">{message}</p>
       ) : null}
       {state === 'denied' ? (
         <p className="text-sm text-live-danger" role="alert">
@@ -195,10 +179,7 @@ export function ScreenShareControls({
         {state === 'sharing' ? (
           <button
             type="button"
-            onClick={() => {
-              void stopSharing(true);
-              setState('idle');
-            }}
+            onClick={() => { void stopSharing(true); setState('idle'); }}
             className="rounded-xl border border-border px-4 py-2 text-sm font-semibold text-foreground"
           >
             Stop sharing

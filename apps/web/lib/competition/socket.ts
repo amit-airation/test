@@ -1,59 +1,71 @@
 'use client';
 
 import { io, type Socket } from 'socket.io-client';
-import { CLIENT_WS_ACTIONS } from './types';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'http://localhost:3001';
+const EVENT_KEY = process.env.NEXT_PUBLIC_EVENT_KEY ?? '';
 
-let sharedSocket: Socket | null = null;
+let socket: Socket | null = null;
 
-export function getCompetitionSocket(token: string): Socket {
-  if (sharedSocket?.connected) {
-    return sharedSocket;
+export function getCompetitionSocket(): Socket {
+  if (!socket || socket.disconnected) {
+    socket = io(`${WS_URL}/competition`, {
+      auth: { eventKey: EVENT_KEY },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 1_000,
+      reconnectionDelayMax: 5_000,
+    });
   }
-
-  sharedSocket = io(`${WS_URL}/competition`, {
-    autoConnect: true,
-    auth: { token },
-    transports: ['websocket', 'polling'],
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-  });
-
-  return sharedSocket;
+  return socket;
 }
 
-export function disconnectCompetitionSocket() {
-  sharedSocket?.disconnect();
-  sharedSocket = null;
-}
-
-export function joinCompetitionRoom(socket: Socket, competitionId: string) {
-  return socket.emitWithAck(CLIENT_WS_ACTIONS.JOIN_COMPETITION, {
-    competitionId,
-  });
-}
-
-export function leaveCompetitionRoom(socket: Socket) {
-  return socket.emitWithAck(CLIENT_WS_ACTIONS.LEAVE_COMPETITION, {});
-}
-
-export function sendHeartbeat(socket: Socket, competitionId: string) {
-  return socket.emitWithAck(CLIENT_WS_ACTIONS.HEARTBEAT, { competitionId });
-}
-
-export function reportScreenShare(socket: Socket, sharing: boolean) {
-  return socket.emitWithAck(CLIENT_WS_ACTIONS.REPORT_SCREEN_SHARE, { sharing });
-}
-
-export function joinParticipantRoom(
-  socket: Socket,
+export function joinCompetitionRoom(
+  s: Socket,
   competitionId: string,
-  participantId: string,
+  companyId?: string,
+  displayName?: string,
 ) {
-  return socket.emitWithAck(CLIENT_WS_ACTIONS.JOIN_PARTICIPANT_ROOM, {
-    competitionId,
-    participantId,
+  return new Promise<void>((resolve) => {
+    s.emit(
+      'join_competition',
+      { competitionId, companyId, displayName },
+      () => resolve(),
+    );
+  });
+}
+
+export function leaveCompetitionRoom(s: Socket) {
+  return new Promise<void>((resolve) => {
+    s.emit('leave_competition', {}, () => resolve());
+  });
+}
+
+export function joinRoundRoom(
+  s: Socket,
+  competitionId: string,
+  roundId: string,
+  companyId?: string,
+) {
+  return new Promise<void>((resolve) => {
+    s.emit('join_round', { competitionId, roundId, companyId }, () => resolve());
+  });
+}
+
+export function leaveRoundRoom(s: Socket) {
+  return new Promise<void>((resolve) => {
+    s.emit('leave_round', {}, () => resolve());
+  });
+}
+
+export function sendHeartbeat(s: Socket, roundId: string) {
+  return new Promise<void>((resolve) => {
+    s.emit('heartbeat', { roundId }, () => resolve());
+  });
+}
+
+export function reportScreenShare(s: Socket, sharing: boolean, roundId?: string) {
+  return new Promise<void>((resolve) => {
+    s.emit('report_screen_share', { sharing, roundId }, () => resolve());
   });
 }

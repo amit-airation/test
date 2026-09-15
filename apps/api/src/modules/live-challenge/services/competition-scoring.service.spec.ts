@@ -1,27 +1,28 @@
 import {
   CompetitionEventType,
-  type Competition,
-  type CompetitionParticipant,
+  type Round,
+  type RoundParticipant,
 } from '../../../generated/prisma/client.js';
-import { CompetitionScoringService } from './competition-scoring.service.js';
+import { RoundScoringService } from './round-scoring.service.js';
 
 const NOW = new Date('2026-01-01T10:01:00.000Z');
+const PREV_TIME = new Date('2026-01-01T10:00:46.000Z'); // 14s earlier
 
 function context() {
   return {
-    competition: { id: 'c1' } as Competition,
+    round: { id: 'r1', competitionId: 'c1' } as Round,
     participant: {
       id: 'p1',
-      finalScore: 3,
+      finalScore: 1,
       scoreReachedAt: null,
-    } as CompetitionParticipant,
+    } as RoundParticipant,
     now: NOW,
   };
 }
 
-function txStub(options: { duplicateJob?: boolean }) {
+function txStub(options: { duplicateJob?: boolean; previousScore?: boolean }) {
   return {
-    competitionJobScore: {
+    roundJobScore: {
       findUnique: vi.fn(() =>
         Promise.resolve(
           options.duplicateJob
@@ -29,20 +30,27 @@ function txStub(options: { duplicateJob?: boolean }) {
             : null,
         ),
       ),
+      findFirst: vi.fn(() =>
+        Promise.resolve(
+          options.previousScore
+            ? { id: 'ledger-0', createdAt: PREV_TIME }
+            : null,
+        ),
+      ),
       create: vi.fn(() => Promise.resolve({ id: 'ledger-1' })),
     },
-    competitionParticipant: {
+    roundParticipant: {
       update: vi.fn(() =>
         Promise.resolve({
           id: 'p1',
-          finalScore: 4,
+          finalScore: 2,
           scoreReachedAt: NOW,
         }),
       ),
       findUniqueOrThrow: vi.fn(() =>
         Promise.resolve({
           id: 'p1',
-          finalScore: 3,
+          finalScore: 1,
           scoreReachedAt: NOW,
         }),
       ),
@@ -52,10 +60,10 @@ function txStub(options: { duplicateJob?: boolean }) {
   };
 }
 
-describe('CompetitionScoringService', () => {
-  const service = new CompetitionScoringService({} as never);
+describe('RoundScoringService', () => {
+  const service = new RoundScoringService();
 
-  it('increments the score once and audits the publish', async () => {
+  it('increments score and records postDurationSeconds as null for 1st job', async () => {
     const tx = txStub({});
 
     const result = await service.recordSuccessfulPublish(
@@ -64,8 +72,12 @@ describe('CompetitionScoringService', () => {
       'job-1',
     );
 
-    expect(result).toMatchObject({ scored: true, finalScore: 4 });
-    expect(tx.competitionParticipant.update).toHaveBeenCalledWith(
+    expect(result).toMatchObject({
+      scored: true,
+      finalScore: 2,
+      postDurationSeconds: null,
+    });
+    expect(tx.roundParticipant.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ finalScore: { increment: 1 } }),
       }),
@@ -77,9 +89,22 @@ describe('CompetitionScoringService', () => {
         }),
       }),
     );
-    expect(tx.job.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { scoredAt: NOW } }),
+  });
+
+  it('computes postDurationSeconds accurately for 2nd+ job', async () => {
+    const tx = txStub({ previousScore: true });
+
+    const result = await service.recordSuccessfulPublish(
+      tx as never,
+      context(),
+      'job-2',
     );
+
+    expect(result).toMatchObject({
+      scored: true,
+      finalScore: 2,
+      postDurationSeconds: 14,
+    });
   });
 
   it('does not double count when the same job is scored twice', async () => {
@@ -91,17 +116,8 @@ describe('CompetitionScoringService', () => {
       'job-1',
     );
 
-    expect(result).toMatchObject({ scored: false, finalScore: 3 });
-    expect(tx.competitionParticipant.update).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ scored: false, finalScore: 1 });
+    expect(tx.roundParticipant.update).not.toHaveBeenCalled();
     expect(tx.competitionEvent.create).not.toHaveBeenCalled();
-  });
-
-  it('propagates unexpected ledger failures', async () => {
-    const tx = txStub({});
-    tx.competitionJobScore.create.mockRejectedValue(new Error('db down'));
-
-    await expect(
-      service.recordSuccessfulPublish(tx as never, context(), 'job-1'),
-    ).rejects.toThrow('db down');
   });
 });

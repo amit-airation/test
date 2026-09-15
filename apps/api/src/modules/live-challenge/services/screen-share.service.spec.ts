@@ -1,14 +1,7 @@
+import { RoomServiceClient, TrackSource } from 'livekit-server-sdk';
+import { ParticipantStatus, RoundStatus } from '../../../generated/prisma/client.js';
 import {
-  RoomServiceClient,
-  TrackSource,
-} from 'livekit-server-sdk';
-import {
-  CompetitionStatus,
-  ParticipantStatus,
-  UserRole,
-} from '../../../generated/prisma/client.js';
-import {
-  parseScreenSharePublisherUserId,
+  parseScreenSharePublisherCompanyId,
   ScreenShareService,
   screenSharePublisherIdentity,
   screenShareRoomName,
@@ -43,7 +36,7 @@ vi.mock('livekit-server-sdk', () => {
 
 function build(options?: {
   configured?: boolean;
-  competition?: Record<string, unknown> | null;
+  round?: Record<string, unknown> | null;
   participant?: Record<string, unknown> | null;
 }) {
   const configured = options?.configured ?? true;
@@ -58,27 +51,27 @@ function build(options?: {
     },
   };
   const prisma = {
-    competition: {
+    round: {
       findUnique: vi.fn(() =>
         Promise.resolve(
-          options?.competition === null
+          options?.round === null
             ? null
             : {
-                id: 'c1',
-                status: CompetitionStatus.LIVE,
+                id: 'r1',
+                status: RoundStatus.LIVE,
                 endAt: new Date(Date.now() + 120_000),
-                ...options?.competition,
+                ...options?.round,
               },
         ),
       ),
     },
-    competitionParticipant: {
+    roundParticipant: {
       findUnique: vi.fn(() =>
         Promise.resolve(
           options?.participant === undefined
             ? {
                 id: 'p1',
-                userId: 'u1',
+                companyId: 'co1',
                 status: ParticipantStatus.ACTIVE,
               }
             : options.participant,
@@ -101,41 +94,28 @@ describe('ScreenShareService', () => {
     expect(service.getStatus()).toEqual({ configured: false });
   });
 
-  it('issues a publish token for a LIVE participant', async () => {
+  it('issues a publish token for a LIVE round participant', async () => {
     const { service } = build();
     const result = await service.issueToken(
-      'c1',
-      {
-        id: 'u1',
-        email: 'a@example.com',
-        name: 'Ada',
-        role: UserRole.EMPLOYER,
-      },
+      'r1',
+      'co1',
+      'Jane Smith',
       'publish',
     );
 
     expect(result.token).toBe('signed-livekit-token');
     expect(result.can_publish).toBe(true);
-    expect(result.identity).toBe(screenSharePublisherIdentity('u1'));
-    expect(result.room).toBe(screenShareRoomName('c1'));
+    expect(result.identity).toBe(screenSharePublisherIdentity('co1'));
+    expect(result.room).toBe(screenShareRoomName('r1'));
     expect(TrackSource.SCREEN_SHARE).toBeDefined();
   });
 
-  it('rejects publish when the competition is not LIVE', async () => {
+  it('rejects publish when the round is not LIVE', async () => {
     const { service } = build({
-      competition: { status: CompetitionStatus.ENDED },
+      round: { status: RoundStatus.ENDED },
     });
     await expect(
-      service.issueToken(
-        'c1',
-        {
-          id: 'u1',
-          email: 'a@example.com',
-          name: 'Ada',
-          role: UserRole.EMPLOYER,
-        },
-        'publish',
-      ),
+      service.issueToken('r1', 'co1', 'Jane Smith', 'publish'),
     ).rejects.toThrow(/LIVE/);
   });
 
@@ -143,54 +123,36 @@ describe('ScreenShareService', () => {
     const { service } = build({
       participant: {
         id: 'p1',
-        userId: 'u1',
+        companyId: 'co1',
         status: ParticipantStatus.DISQUALIFIED,
       },
     });
     await expect(
-      service.issueToken(
-        'c1',
-        {
-          id: 'u1',
-          email: 'a@example.com',
-          name: 'Ada',
-          role: UserRole.EMPLOYER,
-        },
-        'publish',
-      ),
+      service.issueToken('r1', 'co1', 'Jane Smith', 'publish'),
     ).rejects.toThrow(/Disqualified/);
   });
 
-  it('allows admins to watch without being on the roster', async () => {
+  it('allows observers to watch without being a registered participant', async () => {
     const { service } = build({ participant: null });
-    const result = await service.issueToken(
-      'c1',
-      {
-        id: 'admin-1',
-        email: 'admin@example.com',
-        name: 'Admin',
-        role: UserRole.ADMIN,
-      },
-      'watch',
-    );
+    const result = await service.issueToken('r1', null, 'Observer', 'watch');
     expect(result.can_publish).toBe(false);
-    expect(result.identity).toBe('subscriber:admin-1');
+    expect(result.identity).toMatch(/^subscriber:observer-/);
   });
 
   it('closes rooms and kicks publishers through RoomServiceClient', async () => {
     const { service } = build();
-    await service.closeRoom('c1');
-    await service.kickPublisher('c1', 'u1');
+    await service.closeRoom('r1');
+    await service.kickPublisher('r1', 'co1');
     expect(RoomServiceClient).toHaveBeenCalled();
-    expect(deleteRoom).toHaveBeenCalledWith(screenShareRoomName('c1'));
+    expect(deleteRoom).toHaveBeenCalledWith(screenShareRoomName('r1'));
     expect(removeParticipant).toHaveBeenCalledWith(
-      screenShareRoomName('c1'),
-      screenSharePublisherIdentity('u1'),
+      screenShareRoomName('r1'),
+      screenSharePublisherIdentity('co1'),
     );
   });
 
   it('parses publisher identities', () => {
-    expect(parseScreenSharePublisherUserId('publisher:abc')).toBe('abc');
-    expect(parseScreenSharePublisherUserId('subscriber:abc')).toBeNull();
+    expect(parseScreenSharePublisherCompanyId('publisher:co1')).toBe('co1');
+    expect(parseScreenSharePublisherCompanyId('subscriber:co1')).toBeNull();
   });
 });

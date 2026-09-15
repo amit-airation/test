@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   isExternalJobWebhookEnabled,
-  requireExternalUserIdOnJoin,
   resolveExternalJobWebhookSkewSeconds,
 } from './external-job.config.js';
 
@@ -19,15 +18,6 @@ describe('external-job.config', () => {
         configFor({ EXTERNAL_JOB_WEBHOOK_ENABLED: 'false' }),
       ),
     ).toBe(false);
-  });
-
-  it('does not require externalUserId on join by default', () => {
-    expect(requireExternalUserIdOnJoin(configFor({}))).toBe(false);
-    expect(
-      requireExternalUserIdOnJoin(
-        configFor({ REQUIRE_EXTERNAL_USER_ID_ON_JOIN: 'true' }),
-      ),
-    ).toBe(true);
   });
 
   it('falls back to the default skew window', () => {

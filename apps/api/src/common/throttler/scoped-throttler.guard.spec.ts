@@ -4,9 +4,6 @@ import type { ExecutionContext } from '@nestjs/common';
 import { RATE_LIMIT_POLICIES } from './rate-limit.policies.js';
 import { ScopedThrottlerGuard } from './scoped-throttler.guard.js';
 
-const SECRET = 's'.repeat(40);
-
-/** Exposes the protected hooks under test without changing behaviour. */
 class TestGuard extends ScopedThrottlerGuard {
   callHandleRequest(request: unknown) {
     return this.handleRequest(request as never);
@@ -17,28 +14,15 @@ class TestGuard extends ScopedThrottlerGuard {
   }
 }
 
-function build(options?: { policy?: string; verifiedSub?: string }) {
+function build(options?: { policy?: string }) {
   const reflector = new Reflector();
   vi.spyOn(reflector, 'getAllAndOverride').mockReturnValue(
     options?.policy as never,
   );
-  const jwt = {
-    verify: vi.fn(() => {
-      if (!options?.verifiedSub) {
-        throw new Error('invalid token');
-      }
-      return { sub: options.verifiedSub };
-    }),
-  };
-  const config = {
-    get: (key: string) => (key === 'JWT_SECRET' ? SECRET : undefined),
-  };
   return new TestGuard(
     { throttlers: [] } as never,
     {} as never,
     reflector,
-    jwt as never,
-    config as never,
   );
 }
 
@@ -90,33 +74,11 @@ describe('ScopedThrottlerGuard policy selection', () => {
 });
 
 describe('ScopedThrottlerGuard tracker', () => {
-  it('buckets verified callers by user id', async () => {
-    const guard = build({ verifiedSub: 'user-1' });
-
-    await expect(
-      guard.callGetTracker({
-        headers: { authorization: 'Bearer token' },
-        ip: '10.0.0.1',
-      }),
-    ).resolves.toBe('user:user-1');
-  });
-
-  it('falls back to the client address for anonymous callers', async () => {
+  it('falls back to the client address', async () => {
     const guard = build();
 
     await expect(
       guard.callGetTracker({ headers: {}, ip: '10.0.0.1' }),
-    ).resolves.toBe('ip:10.0.0.1');
-  });
-
-  it('never trusts an unverifiable token for bucketing', async () => {
-    const guard = build();
-
-    await expect(
-      guard.callGetTracker({
-        headers: { authorization: 'Bearer forged' },
-        ip: '10.0.0.1',
-      }),
     ).resolves.toBe('ip:10.0.0.1');
   });
 });

@@ -1,19 +1,22 @@
-import type { CompetitionMe } from './types';
+import type { LeaderboardEntry, TimerSnapshot } from './types';
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api';
 
+const EVENT_KEY =
+  process.env.NEXT_PUBLIC_EVENT_KEY ?? '';
+
 async function apiFetch<T>(
   path: string,
-  options: RequestInit & { token?: string } = {},
+  options: RequestInit = {},
 ): Promise<T> {
-  const { token, headers, ...rest } = options;
+  const { headers, ...rest } = options;
   const response = await fetch(`${API_URL}${path}`, {
     ...rest,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
+      'x-event-key': EVENT_KEY,
+      ...(headers as Record<string, string> | undefined),
     },
   });
 
@@ -25,108 +28,106 @@ async function apiFetch<T>(
   return response.json() as Promise<T>;
 }
 
-export function login(email: string, password: string) {
-  return apiFetch<{
-    access_token: string;
-    user: { id: string; email: string; name: string; role: string };
-  }>('/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email, password }),
-  });
-}
+// ─── Competition ─────────────────────────────────────────────────────────────
 
-/** Public sign-up always creates an employer; admins are provisioned server-side. */
-export function register(input: {
-  email: string;
-  password: string;
-  name: string;
-}) {
-  return apiFetch<{
-    access_token: string;
-    user: { id: string; email: string; name: string; role: string };
-  }>('/auth/register', {
-    method: 'POST',
-    body: JSON.stringify(input),
-  });
-}
-
-/** HTTP snapshot used after socket reconnect. */
-export function fetchCompetitionSnapshot(competitionId: string, token: string) {
+export function fetchCompetitionSnapshot(competitionId: string) {
   return apiFetch<{
     id: string;
     name: string;
     status: string;
-    timer: {
-      competition_id: string;
+    activeRoundId: string | null;
+    rounds: Array<{
+      id: string;
+      roundNumber: number;
+      name: string | null;
       status: string;
-      server_time: string;
-      start_at: string | null;
-      end_at: string | null;
-      duration_seconds: number;
-      time_remaining_seconds: number | null;
-    };
-  }>(`/competitions/${competitionId}`, { token });
+      durationSeconds: number;
+      actualStartAt: string | null;
+      endAt: string | null;
+    }>;
+  }>(`/competitions/${competitionId}`);
 }
 
-export function fetchMyCompetitionState(competitionId: string, token: string) {
-  return apiFetch<CompetitionMe>(`/competitions/${competitionId}/me`, { token });
-}
+// ─── Rounds ──────────────────────────────────────────────────────────────────
 
-export function fetchLeaderboard(competitionId: string, token: string) {
+export function fetchRound(competitionId: string, roundId: string) {
   return apiFetch<{
+    id: string;
+    competitionId: string;
+    roundNumber: number;
+    name: string | null;
+    status: string;
+    durationSeconds: number;
+    actualStartAt: string | null;
+    endAt: string | null;
+    winnerCompanyId: string | null;
+  }>(`/competitions/${competitionId}/rounds/${roundId}`);
+}
+
+export function fetchRoundLeaderboard(competitionId: string, roundId: string) {
+  return apiFetch<{
+    round_id: string;
     competition_id: string;
     status: string;
-    participants: Array<{
-      rank: number;
-      user_id: string;
-      name: string;
-      score: number;
-      status?: string;
-    }>;
-  }>(`/competitions/${competitionId}/leaderboard`, { token });
+    timer: TimerSnapshot;
+    participants: LeaderboardEntry[];
+  }>(`/competitions/${competitionId}/rounds/${roundId}/leaderboard`);
 }
 
-export function joinCompetition(
+export function fetchRoundMe(
   competitionId: string,
-  token: string,
-  companyId?: string,
-  externalUserId?: string,
+  roundId: string,
+  companyId: string,
 ) {
-  return apiFetch(`/competitions/${competitionId}/join`, {
-    method: 'POST',
-    token,
-    body: JSON.stringify({
-      ...(companyId ? { companyId } : {}),
-      ...(externalUserId ? { externalUserId } : {}),
-    }),
-  });
+  return apiFetch<{
+    round_id: string;
+    competition_id: string;
+    status: string;
+    my_score: number;
+    my_rank: number | null;
+    timer: TimerSnapshot;
+    participant: {
+      id: string;
+      status: string;
+      company_id: string;
+      display_name: string;
+      company_name: string;
+      last_scored_at: string | null;
+    };
+  }>(
+    `/competitions/${competitionId}/rounds/${roundId}/me?company_id=${encodeURIComponent(companyId)}`,
+  );
 }
 
-export function listCompanies(token: string) {
-  return apiFetch<Array<{ id: string; name: string }>>('/companies', {
-    token,
-  });
+export function joinRound(
+  competitionId: string,
+  roundId: string,
+  body: { companyId: string; companyName: string; displayName: string },
+) {
+  return apiFetch(
+    `/competitions/${competitionId}/rounds/${roundId}/join`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+  );
 }
 
-export function createCompany(token: string, name: string) {
-  return apiFetch<{ id: string; name: string }>('/companies', {
-    method: 'POST',
-    token,
-    body: JSON.stringify({ name }),
-  });
-}
-
-export function fetchScreenShareStatus(competitionId: string, token: string) {
+export function fetchScreenShareStatus(
+  competitionId: string,
+  roundId: string,
+) {
   return apiFetch<{ configured: boolean }>(
-    `/competitions/${competitionId}/screen-share`,
-    { token },
+    `/competitions/${competitionId}/rounds/${roundId}/screen-share`,
   );
 }
 
 export function fetchScreenShareToken(
   competitionId: string,
-  token: string,
+  roundId: string,
   intent: 'publish' | 'watch',
+  companyId?: string,
+  displayName?: string,
 ) {
   return apiFetch<{
     configured: boolean;
@@ -137,9 +138,8 @@ export function fetchScreenShareToken(
     intent: 'publish' | 'watch';
     can_publish: boolean;
     expires_in_seconds: number;
-  }>(`/competitions/${competitionId}/screen-share/token`, {
+  }>(`/competitions/${competitionId}/rounds/${roundId}/screen-share/token`, {
     method: 'POST',
-    token,
-    body: JSON.stringify({ intent }),
+    body: JSON.stringify({ intent, companyId, displayName }),
   });
 }

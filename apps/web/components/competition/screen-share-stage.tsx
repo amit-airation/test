@@ -13,23 +13,17 @@ import {
   fetchScreenShareStatus,
   fetchScreenShareToken,
 } from '@/lib/competition/api';
-
-type LeaderboardEntry = {
-  rank: number;
-  user_id: string;
-  name: string;
-  score: number;
-};
+import type { LeaderboardEntry } from '@/lib/competition/types';
 
 type ScreenShareStageProps = {
   competitionId: string;
-  token: string;
-  status: string | null;
+  roundId: string | null;
+  roundStatus: string | null;
   participants: LeaderboardEntry[];
 };
 
 type RemoteScreen = {
-  userId: string;
+  companyId: string;
   name: string;
   track: RemoteTrack;
   publication: RemoteTrackPublication;
@@ -37,38 +31,33 @@ type RemoteScreen = {
 
 export function ScreenShareStage({
   competitionId,
-  token,
-  status,
+  roundId,
+  roundStatus,
   participants,
 }: ScreenShareStageProps) {
   const roomRef = useRef<Room | null>(null);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [screens, setScreens] = useState<RemoteScreen[]>([]);
-  const [focusedUserId, setFocusedUserId] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const live = status === 'LIVE';
+  const live = roundStatus === 'LIVE';
 
   useEffect(() => {
+    if (!roundId) { setConfigured(false); return; }
     let cancelled = false;
-    void fetchScreenShareStatus(competitionId, token)
-      .then((result) => {
-        if (!cancelled) setConfigured(result.configured);
-      })
-      .catch(() => {
-        if (!cancelled) setConfigured(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [competitionId, token]);
+    void fetchScreenShareStatus(competitionId, roundId)
+      .then((r) => { if (!cancelled) setConfigured(r.configured); })
+      .catch(() => { if (!cancelled) setConfigured(false); });
+    return () => { cancelled = true; };
+  }, [competitionId, roundId]);
 
   useEffect(() => {
-    if (!configured || !live) {
+    if (!configured || !live || !roundId) {
       roomRef.current?.disconnect();
       roomRef.current = null;
       setScreens([]);
-      setFocusedUserId(null);
+      setFocusedId(null);
       return;
     }
 
@@ -76,47 +65,34 @@ export function ScreenShareStage({
     const room = new Room({ adaptiveStream: true, dynacast: true });
     roomRef.current = room;
 
-    const upsert = (next: RemoteScreen) => {
-      setScreens((prev) => {
-        const without = prev.filter((item) => item.userId !== next.userId);
-        return [...without, next];
-      });
-    };
-    const remove = (userId: string) => {
-      setScreens((prev) => prev.filter((item) => item.userId !== userId));
-      setFocusedUserId((current) => (current === userId ? null : current));
+    const upsert = (next: RemoteScreen) =>
+      setScreens((prev) => [...prev.filter((s) => s.companyId !== next.companyId), next]);
+    const remove = (cid: string) => {
+      setScreens((prev) => prev.filter((s) => s.companyId !== cid));
+      setFocusedId((cur) => (cur === cid ? null : cur));
     };
 
     room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
       if (track.kind !== Track.Kind.Video) return;
-      const userId = userIdFromIdentity(participant.identity);
-      if (!userId) return;
+      const cid = companyIdFromIdentity(participant.identity);
+      if (!cid) return;
       void publication.setVideoQuality(VideoQuality.LOW);
-      upsert({
-        userId,
-        name: participant.name || userId,
-        track,
-        publication,
-      });
+      upsert({ companyId: cid, name: participant.name || cid, track, publication });
     });
-    room.on(RoomEvent.TrackUnsubscribed, (_track, _publication, participant) => {
-      const userId = userIdFromIdentity(participant.identity);
-      if (userId) remove(userId);
+    room.on(RoomEvent.TrackUnsubscribed, (_t, _p, participant) => {
+      const cid = companyIdFromIdentity(participant.identity);
+      if (cid) remove(cid);
     });
     room.on(RoomEvent.ParticipantDisconnected, (participant) => {
-      const userId = userIdFromIdentity(participant.identity);
-      if (userId) remove(userId);
+      const cid = companyIdFromIdentity(participant.identity);
+      if (cid) remove(cid);
     });
 
-    void fetchScreenShareToken(competitionId, token, 'watch')
-      .then((creds) => {
-        if (cancelled) return;
-        return room.connect(creds.url, creds.token);
-      })
+    void fetchScreenShareToken(competitionId, roundId, 'watch')
+      .then((creds) => { if (!cancelled) return room.connect(creds.url, creds.token); })
       .catch((err: unknown) => {
-        if (!cancelled) {
+        if (!cancelled)
           setError(err instanceof Error ? err.message : 'Unable to watch screens');
-        }
       });
 
     return () => {
@@ -124,37 +100,25 @@ export function ScreenShareStage({
       room.disconnect();
       if (roomRef.current === room) roomRef.current = null;
     };
-  }, [configured, live, competitionId, token]);
+  }, [configured, live, competitionId, roundId]);
 
   useEffect(() => {
     for (const screen of screens) {
       void screen.publication.setVideoQuality(
-        focusedUserId === screen.userId ? VideoQuality.HIGH : VideoQuality.LOW,
+        focusedId === screen.companyId ? VideoQuality.HIGH : VideoQuality.LOW,
       );
     }
-  }, [focusedUserId, screens]);
+  }, [focusedId, screens]);
 
-  if (configured === false) {
-    return (
-      <p className="text-center text-sm text-muted-text" role="status">
-        Screen share unavailable.
-      </p>
-    );
-  }
-
-  if (!live) {
-    return null;
-  }
+  if (configured === false || !live) return null;
 
   if (error) {
     return (
-      <p className="text-center text-sm text-warning" role="status">
-        {error}
-      </p>
+      <p className="text-center text-sm text-warning" role="status">{error}</p>
     );
   }
 
-  const focused = screens.find((item) => item.userId === focusedUserId) ?? null;
+  const focused = screens.find((s) => s.companyId === focusedId) ?? null;
 
   return (
     <section className="space-y-3">
@@ -165,13 +129,14 @@ export function ScreenShareStage({
         {focused ? (
           <button
             type="button"
-            onClick={() => setFocusedUserId(null)}
+            onClick={() => setFocusedId(null)}
             className="text-sm text-muted-text underline"
           >
             Back to grid
           </button>
         ) : null}
       </div>
+
       {screens.length === 0 ? (
         <p className="text-sm text-muted-text">
           Waiting for participants to share their screens.
@@ -179,16 +144,16 @@ export function ScreenShareStage({
       ) : focused ? (
         <FocusTile
           screen={focused}
-          participant={participants.find((p) => p.user_id === focused.userId)}
+          participant={participants.find((p) => p.company_id === focused.companyId)}
         />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {screens.map((screen) => (
             <GridTile
-              key={screen.userId}
+              key={screen.companyId}
               screen={screen}
-              participant={participants.find((p) => p.user_id === screen.userId)}
-              onSelect={() => setFocusedUserId(screen.userId)}
+              participant={participants.find((p) => p.company_id === screen.companyId)}
+              onSelect={() => setFocusedId(screen.companyId)}
             />
           ))}
         </div>
@@ -215,7 +180,7 @@ function GridTile({
       <VideoSurface track={screen.track} muted />
       <div className="px-3 py-2">
         <p className="truncate font-semibold text-foreground">
-          {participant?.name ?? screen.name}
+          {participant?.display_name ?? screen.name}
         </p>
         <p className="text-sm text-muted-text">
           {participant ? `${participant.score} jobs` : 'Sharing'}
@@ -236,8 +201,8 @@ function FocusTile({
     <div className="overflow-hidden rounded-3xl border border-border bg-surface">
       <div className="flex flex-wrap items-baseline justify-between gap-2 px-5 py-4">
         <p className="text-xl font-semibold text-foreground sm:text-3xl">
-          {participant?.name ?? screen.name}
-          {participant?.rank ? ` • #${participant.rank}` : ''}
+          {participant?.display_name ?? screen.name}
+          {participant?.rank ? ` · #${participant.rank}` : ''}
         </p>
         {participant ? (
           <p className="text-lg text-muted-text">{participant.score} jobs</p>
@@ -263,9 +228,7 @@ function VideoSurface({
     const el = ref.current;
     if (!el) return;
     track.attach(el);
-    return () => {
-      track.detach(el);
-    };
+    return () => { track.detach(el); };
   }, [track]);
 
   return (
@@ -279,7 +242,7 @@ function VideoSurface({
   );
 }
 
-function userIdFromIdentity(identity: string) {
+function companyIdFromIdentity(identity: string) {
   return identity.startsWith('publisher:')
     ? identity.slice('publisher:'.length)
     : null;
