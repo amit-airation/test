@@ -75,7 +75,10 @@ NEXT_PUBLIC_EVENT_KEY=event-access-key-secret-32chars!!
 | Participant / observer | `x-event-key` / `NEXT_PUBLIC_EVENT_KEY` |
 | Job server | HMAC webhook secret |
 
-Join identity: **companyId + companyName** only (no login).
+Join identity: **closed roster**. Admin registers
+`companyId` + `companyName` + `mobile`. Participants
+join with **mobile + join PIN** (default `123456`).
+No company-id self-join.
 
 ### Webhook signing
 
@@ -122,7 +125,18 @@ try {
 
 ---
 
-## 3. Create competition + LIVE round (admin)
+## 3. Create competition + LIVE round (admin UI or API)
+
+### Preferred: Admin UI
+
+1. Open `http://localhost:3000/admin`
+2. Paste `ADMIN_KEY` from `apps/api/.env`
+3. Create a competition
+4. Open it → add a round → Start (or Schedule)
+5. Roster: add company ID, name, and mobile
+6. Copy participant / TV links
+
+### API (PowerShell)
 
 ```powershell
 $API = 'http://localhost:3006/api'
@@ -157,13 +171,15 @@ Invoke-RestMethod -Method POST "$API/competitions/$compId/active-round" `
 
 $companyId = [guid]::NewGuid().ToString()
 $companyName = 'Demo Company'
+$mobile = '9876543210'
 
-Invoke-RestMethod -Method POST "$API/competitions/$compId/rounds/$roundId/join" `
-  -Headers $EventHeaders `
+Invoke-RestMethod -Method POST "$API/competitions/$compId/rounds/$roundId/register" `
+  -Headers $AdminHeaders `
   -Body (@{
-    companyId = $companyId
-    companyName = $companyName
-  } | ConvertTo-Json) | Out-Null
+    participants = @(
+      @{ companyId = $companyId; companyName = $companyName; mobile = $mobile }
+    )
+  } | ConvertTo-Json -Depth 5) | Out-Null
 
 Invoke-RestMethod -Method POST "$API/competitions/$compId/rounds/$roundId/start" `
   -Headers $AdminHeaders | Out-Null
@@ -171,8 +187,10 @@ Invoke-RestMethod -Method POST "$API/competitions/$compId/rounds/$roundId/start"
 Write-Host "COMPETITION_ID=$compId"
 Write-Host "ROUND_ID=$roundId"
 Write-Host "COMPANY_ID=$companyId"
+Write-Host "MOBILE=$mobile"
 Write-Host "UI   http://localhost:3000/competition/$compId"
 Write-Host "LIVE http://localhost:3000/competition/$compId/live"
+Write-Host "ADMIN http://localhost:3000/admin/$compId"
 ```
 
 ---
@@ -180,7 +198,7 @@ Write-Host "LIVE http://localhost:3000/competition/$compId/live"
 ## 4. Participant join (UI)
 
 1. Open `http://localhost:3000/competition/<COMPETITION_ID>`
-2. Enter **Company ID** + **Company name** (same UUID used above, or a new one)
+2. Enter **Mobile** (registered above) + **Join password** (`123456` unless changed)
 3. Join
 
 You should see score `0`, rank, timer — **no** create-job form.
@@ -276,7 +294,9 @@ npm run load:competition -w api
 
 - [ ] Health live/ready OK
 - [ ] `/api/jobs` → 404
-- [ ] Join with companyId + companyName only
+- [ ] Admin `/admin` unlock with `ADMIN_KEY`
+- [ ] Register with companyId + companyName + mobile
+- [ ] Join with mobile + PIN only
 - [ ] Webhook scores within LIVE window
 - [ ] Duplicate `external_job_id` does not double-count
 - [ ] Score rejected after `endAt + 3s`

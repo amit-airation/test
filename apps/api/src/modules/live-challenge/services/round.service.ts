@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import {
   CompetitionEventType,
@@ -12,6 +13,10 @@ import {
 } from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
 import { DEFAULT_ROUND_DURATION_SECONDS } from '../constants.js';
+import {
+  assertValidMobile,
+  verifyJoinPin,
+} from '../utils/join-pin.js';
 import { WS_EVENTS } from '../ws-events.js';
 import { CompetitionRealtimeService } from './competition-realtime.service.js';
 import { RoundLeaderboardService } from './round-leaderboard.service.js';
@@ -111,21 +116,24 @@ export class RoundService {
     await this.lifecycle.requireRound(roundId);
     return this.prisma.roundParticipant.findMany({
       where: { roundId },
-      include: { company: { select: { id: true, name: true } } },
+      include: {
+        company: { select: { id: true, name: true, mobile: true } },
+      },
       orderBy: [{ finalScore: 'desc' }, { createdAt: 'asc' }],
     });
   }
 
   /**
-   * Bulk-registers participants for a round.
-   * Upserts the Company by id (creates with given name, or updates name if changed).
-   * Creates RoundParticipant records. Skips duplicates silently.
+   * Admin closed-roster registration.
+   * Upserts Company (id + name + mobile) and creates RoundParticipant.
+   * Does not allow join without a prior register.
    */
   async registerParticipants(
     roundId: string,
     participants: Array<{
       companyId: string;
       companyName: string;
+      mobile: string;
     }>,
   ) {
     const round = await this.lifecycle.requireRound(roundId);
@@ -139,14 +147,35 @@ export class RoundService {
       );
     }
 
-    const results: Array<{ companyId: string; participantId: string }> = [];
+    const results: Array<{
+      companyId: string;
+      participantId: string;
+      mobile: string;
+    }> = [];
 
     for (const p of participants) {
-      // Upsert company by id (main server's UUID is authoritative)
+      let mobile: string;
+      try {
+        mobile = assertValidMobile(p.mobile);
+      } catch {
+        throw new BadRequestException(
+          `Invalid mobile for company ${p.companyId}: must be 10–15 digits`,
+        );
+      }
+
+      const mobileOwner = await this.prisma.company.findUnique({
+        where: { mobile },
+      });
+      if (mobileOwner && mobileOwner.id !== p.companyId) {
+        throw new BadRequestException(
+          `Mobile ${mobile} is already registered to another company`,
+        );
+      }
+
       await this.prisma.company.upsert({
         where: { id: p.companyId },
-        create: { id: p.companyId, name: p.companyName },
-        update: { name: p.companyName },
+        create: { id: p.companyId, name: p.companyName, mobile },
+        update: { name: p.companyName, mobile },
       });
 
       try {
@@ -167,12 +196,17 @@ export class RoundService {
               metadata: {
                 companyId: p.companyId,
                 companyName: p.companyName,
+                mobile,
               },
             },
           });
           return created;
         });
-        results.push({ companyId: p.companyId, participantId: participant.id });
+        results.push({
+          companyId: p.companyId,
+          participantId: participant.id,
+          mobile,
+        });
       } catch (error) {
         if (
           typeof error === 'object' &&
@@ -180,7 +214,6 @@ export class RoundService {
           'code' in error &&
           (error as { code: string }).code === 'P2002'
         ) {
-          // Already registered — skip silently
           const existing = await this.prisma.roundParticipant.findUnique({
             where: { roundId_companyId: { roundId, companyId: p.companyId } },
           });
@@ -188,6 +221,7 @@ export class RoundService {
             results.push({
               companyId: p.companyId,
               participantId: existing.id,
+              mobile,
             });
           }
         } else {
@@ -206,12 +240,10 @@ export class RoundService {
   }
 
   /**
-   * Self-join for open rounds. Upserts company and creates participant.
+   * Closed-roster join: mobile + competition PIN.
+   * Company must already be registered for the round.
    */
-  async join(
-    roundId: string,
-    dto: { companyId: string; companyName: string },
-  ) {
+  async join(roundId: string, dto: { mobile: string; password: string }) {
     const round = await this.lifecycle.requireRound(roundId);
 
     if (
@@ -222,75 +254,101 @@ export class RoundService {
       throw new BadRequestException('Round is not open for joining');
     }
 
-    // Check if already registered
-    let participant = await this.prisma.roundParticipant.findUnique({
+    let mobile: string;
+    try {
+      mobile = assertValidMobile(dto.mobile);
+    } catch {
+      throw new BadRequestException('Mobile must be 10–15 digits');
+    }
+
+    const competition = await this.prisma.competition.findUnique({
+      where: { id: round.competitionId },
+    });
+    if (!competition) {
+      throw new NotFoundException(
+        `Competition ${round.competitionId} not found`,
+      );
+    }
+
+    if (!verifyJoinPin(dto.password, competition.joinPinHash)) {
+      throw new UnauthorizedException('Invalid join password');
+    }
+
+    const company = await this.prisma.company.findUnique({
+      where: { mobile },
+    });
+    if (!company) {
+      throw new NotFoundException(
+        'This mobile is not registered for the competition',
+      );
+    }
+
+    const participant = await this.prisma.roundParticipant.findUnique({
       where: {
-        roundId_companyId: { roundId, companyId: dto.companyId },
+        roundId_companyId: { roundId, companyId: company.id },
       },
-      include: { company: { select: { id: true, name: true } } },
+      include: {
+        company: { select: { id: true, name: true, mobile: true } },
+      },
     });
 
-    if (participant?.status === ParticipantStatus.DISQUALIFIED) {
+    if (!participant) {
+      throw new ForbiddenException(
+        'You are not on the roster for this round. Ask the admin to register your company.',
+      );
+    }
+
+    if (participant.status === ParticipantStatus.DISQUALIFIED) {
       throw new ForbiddenException(
         'This company has been disqualified from this round',
       );
     }
 
-    // Upsert company
-    await this.prisma.company.upsert({
-      where: { id: dto.companyId },
-      create: { id: dto.companyId, name: dto.companyName },
-      update: { name: dto.companyName },
+    const updated = await this.prisma.roundParticipant.update({
+      where: { id: participant.id },
+      data: {
+        joinedAt: participant.joinedAt ?? new Date(),
+        status:
+          round.status === RoundStatus.LIVE
+            ? ParticipantStatus.ACTIVE
+            : ParticipantStatus.READY,
+      },
+      include: {
+        company: { select: { id: true, name: true, mobile: true } },
+      },
     });
 
-    if (!participant) {
-      participant = await this.prisma.$transaction(async (tx) => {
-        const created = await tx.roundParticipant.create({
-          data: {
-            roundId,
-            companyId: dto.companyId,
-            status:
-              round.status === RoundStatus.LIVE
-                ? ParticipantStatus.ACTIVE
-                : ParticipantStatus.READY,
-            joinedAt: new Date(),
-          },
-          include: { company: { select: { id: true, name: true } } },
-        });
-        await tx.competitionEvent.create({
-          data: {
-            competitionId: round.competitionId,
-            roundId,
-            roundParticipantId: created.id,
-            eventType: CompetitionEventType.JOINED,
-          },
-        });
-        return created;
-      });
-    } else {
-      // Already registered — update join time and status if needed
-      participant = await this.prisma.roundParticipant.update({
-        where: { id: participant.id },
+    if (!participant.joinedAt) {
+      await this.prisma.competitionEvent.create({
         data: {
-          joinedAt: participant.joinedAt ?? new Date(),
-          status:
-            round.status === RoundStatus.LIVE
-              ? ParticipantStatus.ACTIVE
-              : ParticipantStatus.READY,
+          competitionId: round.competitionId,
+          roundId,
+          roundParticipantId: updated.id,
+          eventType: CompetitionEventType.JOINED,
+          metadata: { mobile, companyId: company.id },
         },
-        include: { company: { select: { id: true, name: true } } },
       });
     }
 
     this.realtime.emitPresence(round.competitionId, WS_EVENTS.PARTICIPANT_JOINED, {
       round_id: roundId,
-      participant_id: participant.id,
-      company_id: dto.companyId,
-      company_name: dto.companyName,
-      status: participant.status,
+      participant_id: updated.id,
+      company_id: company.id,
+      company_name: company.name,
+      status: updated.status,
     });
 
-    return participant;
+    return {
+      id: updated.id,
+      roundId: updated.roundId,
+      companyId: updated.companyId,
+      companyName: updated.company.name,
+      mobile: updated.company.mobile,
+      status: updated.status,
+      joinedAt: updated.joinedAt,
+      finalScore: updated.finalScore,
+      finalRank: updated.finalRank,
+    };
   }
 
   async getMe(roundId: string, companyId: string) {
@@ -298,7 +356,9 @@ export class RoundService {
 
     const participant = await this.prisma.roundParticipant.findUnique({
       where: { roundId_companyId: { roundId, companyId } },
-      include: { company: { select: { id: true, name: true } } },
+      include: {
+        company: { select: { id: true, name: true, mobile: true } },
+      },
     });
     if (!participant) {
       throw new NotFoundException(
@@ -333,6 +393,7 @@ export class RoundService {
         status: participant.status,
         company_id: participant.companyId,
         company_name: participant.company.name,
+        mobile: participant.company.mobile,
         last_scored_at: participant.lastScoredAt?.toISOString() ?? null,
       },
     };

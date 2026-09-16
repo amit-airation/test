@@ -1,7 +1,7 @@
 'use client';
 
 import { type FormEvent, useEffect, useState } from 'react';
-import { fetchCompetitionSnapshot, joinRound } from '@/lib/competition/api';
+import { fetchCompetitionSnapshot, fetchRoundMe, joinRound } from '@/lib/competition/api';
 import {
   clearIdentity,
   getIdentity,
@@ -15,8 +15,8 @@ type JoinGateProps = {
 };
 
 export function JoinGate({ competitionId, onReady }: JoinGateProps) {
-  const [companyId, setCompanyId] = useState('');
-  const [companyName, setCompanyName] = useState('');
+  const [mobile, setMobile] = useState('');
+  const [password, setPassword] = useState('123456');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(true);
@@ -32,9 +32,12 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
       try {
         const snapshot = await fetchCompetitionSnapshot(competitionId);
         const roundId = snapshot.activeRoundId;
-        if (roundId) {
-          await joinRound(competitionId, roundId, saved);
+        if (!roundId) {
+          clearIdentity();
+          setRestoring(false);
+          return;
         }
+        await fetchRoundMe(competitionId, roundId, saved.companyId);
         onReady(saved);
       } catch {
         clearIdentity();
@@ -47,12 +50,12 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
     e.preventDefault();
     setError(null);
 
-    if (!companyId.trim()) {
-      setError('Company ID is required');
+    if (!mobile.trim()) {
+      setError('Mobile number is required');
       return;
     }
-    if (!companyName.trim()) {
-      setError('Company name is required');
+    if (!password.trim()) {
+      setError('Password is required');
       return;
     }
 
@@ -67,12 +70,17 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
         return;
       }
 
+      const joined = await joinRound(competitionId, roundId, {
+        mobile: mobile.trim(),
+        password: password.trim(),
+      });
+
       const identity: SessionIdentity = {
-        companyId: companyId.trim(),
-        companyName: companyName.trim(),
+        companyId: joined.companyId,
+        companyName: joined.companyName,
+        mobile: joined.mobile,
       };
 
-      await joinRound(competitionId, roundId, identity);
       setIdentity(identity);
       onReady(identity);
     } catch (err) {
@@ -102,7 +110,8 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
             Live Challenge
           </h1>
           <p className="mt-2 text-sm text-muted-text">
-            Enter your company ID and name to join.
+            Enter the mobile number the admin registered for your company,
+            and the join password.
           </p>
         </div>
 
@@ -110,39 +119,44 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
           <form onSubmit={submit} className="space-y-4" noValidate>
             <div className="space-y-1">
               <label
-                htmlFor="companyId"
+                htmlFor="mobile"
                 className="block text-xs font-semibold uppercase tracking-wide text-muted-text"
               >
-                Company ID
+                Mobile number
               </label>
               <input
-                id="companyId"
+                id="mobile"
                 required
-                value={companyId}
-                onChange={(e) => setCompanyId(e.target.value)}
-                placeholder="UUID from the job server"
-                autoComplete="off"
-                spellCheck={false}
+                value={mobile}
+                onChange={(e) => setMobile(e.target.value)}
+                placeholder="10–15 digit mobile"
+                inputMode="tel"
+                autoComplete="tel"
                 className="w-full rounded-xl border border-border bg-background px-4 py-3 font-mono text-sm text-foreground placeholder:font-sans placeholder:text-muted-text focus:border-primary-accent focus:outline-none"
               />
             </div>
 
             <div className="space-y-1">
               <label
-                htmlFor="companyName"
+                htmlFor="password"
                 className="block text-xs font-semibold uppercase tracking-wide text-muted-text"
               >
-                Company name
+                Join password
               </label>
               <input
-                id="companyName"
+                id="password"
+                type="password"
                 required
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
-                placeholder="e.g. Acme Recruiting"
-                autoComplete="organization"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Default 123456"
+                autoComplete="current-password"
                 className="w-full rounded-xl border border-border bg-background px-4 py-3 text-base text-foreground placeholder:text-muted-text focus:border-primary-accent focus:outline-none"
               />
+              <p className="text-xs text-muted-text">
+                Default is <code className="font-mono">123456</code> unless the
+                admin changed it.
+              </p>
             </div>
 
             {error ? (

@@ -79,10 +79,12 @@ enum CompetitionEventType {
 // ─── Models ──────────────────────────────────────────────────────────────────
 
 /// Company record sourced from the main Hirance job server.
-/// The id is the main server's UUID — passed in by participants at join time.
+/// The id is the main server's UUID. Mobile is the participant join lookup key.
 model Company {
   id        String   @id
   name      String
+  /// Digits-only mobile used for closed-roster join (unique).
+  mobile    String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -99,6 +101,8 @@ model Competition {
   status        CompetitionStatus @default(DRAFT)
   /// Admin-controlled: which round is currently displayed on the observer screen.
   activeRoundId String?           @unique
+  /// Shared join PIN hash (default PIN 123456 on create). Never returned to clients.
+  joinPinHash   String
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 

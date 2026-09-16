@@ -98,6 +98,42 @@ export function ParticipantDashboard({ competitionId }: ParticipantDashboardProp
           sessionSuperseded={live.sessionSuperseded}
         />
 
+        {live.participantStatus === 'DISQUALIFIED' ? (
+          <div
+            role="alert"
+            className="rounded-xl border border-live-danger/40 bg-live-danger/10 px-4 py-3 text-sm font-medium text-live-danger"
+          >
+            You have been disqualified from this round. Scoring and screen share
+            are disabled.
+          </div>
+        ) : null}
+
+        {live.roundStatus &&
+        live.roundStatus !== 'LIVE' &&
+        live.roundStatus !== 'ENDED' &&
+        live.roundStatus !== 'FINALIZED' ? (
+          <div
+            role="status"
+            className="rounded-xl border border-border bg-surface px-4 py-3 text-sm text-muted-text"
+          >
+            Waiting for the round to start. Stay on this page — the timer and
+            scores will update automatically.
+          </div>
+        ) : null}
+
+        {live.roundStatus === 'FINALIZED' || live.roundStatus === 'ENDED' ? (
+          <div
+            role="status"
+            className="rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm font-medium text-success"
+          >
+            {live.roundStatus === 'FINALIZED'
+              ? live.myRank === 1
+                ? 'Final results — you finished #1!'
+                : `Final results — your rank is #${live.myRank ?? '—'}.`
+              : "Time's up — waiting for final results."}
+          </div>
+        ) : null}
+
         {/* Timer */}
         <Countdown timer={live.timer} status={live.roundStatus} />
 

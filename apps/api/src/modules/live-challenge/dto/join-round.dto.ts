@@ -1,11 +1,16 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class JoinRoundDto {
   @IsString()
-  @MinLength(1)
-  companyId!: string;
+  @MinLength(10)
+  @MaxLength(20)
+  @Matches(/^[\d\s+\-()]+$/, {
+    message: 'mobile must contain digits',
+  })
+  mobile!: string;
 
   @IsString()
-  @MinLength(1)
-  companyName!: string;
+  @MinLength(4)
+  @MaxLength(64)
+  password!: string;
 }

@@ -17,6 +17,8 @@ const EVENT_KEY = process.env.EVENT_ACCESS_KEY ?? process.env.NEXT_PUBLIC_EVENT_
 const suffix = String(Math.floor(Math.random() * 1_000_000));
 const companyId = randomUUID();
 const companyName = `Acme Smoke ${suffix}`;
+const mobile = `9${String(Date.now()).slice(-9)}`;
+const JOIN_PIN = process.env.JOIN_PIN ?? '123456';
 
 if (!WEBHOOK_SECRET) throw new Error('Set EXTERNAL_JOB_WEBHOOK_SECRET');
 if (!ADMIN_KEY) throw new Error('Set ADMIN_KEY');
@@ -79,8 +81,17 @@ await json(
 
 await json(
   'POST',
+  `/competitions/${competition.id}/rounds/${round.id}/register`,
+  {
+    participants: [{ companyId, companyName, mobile }],
+  },
+  { admin: true },
+);
+
+await json(
+  'POST',
   `/competitions/${competition.id}/rounds/${round.id}/join`,
-  { companyId, companyName },
+  { mobile, password: JOIN_PIN },
 );
 
 const seen = [];

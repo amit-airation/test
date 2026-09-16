@@ -300,26 +300,33 @@ x-admin-key: <ADMIN_KEY>
 
 ### 7.2 Roster companies
 
-Pre-register (recommended for events):
+Pre-register (required — closed roster):
 
 ```http
 POST /api/competitions/{competitionId}/rounds/{roundId}/register
 x-admin-key: <ADMIN_KEY>
 {
   "participants": [
-    { "companyId": "<hirance-company-uuid>", "companyName": "Acme Recruiting" }
+    {
+      "companyId": "<hirance-company-uuid>",
+      "companyName": "Acme Recruiting",
+      "mobile": "9876543210"
+    }
   ]
 }
 ```
 
-Or let companies self-join from the UI / API with
-`companyId` + `companyName` and `x-event-key`:
+Participants join from the UI / API with **mobile + join PIN**
+(default `123456`) and `x-event-key`:
 
 ```http
 POST /api/competitions/{competitionId}/rounds/{roundId}/join
 x-event-key: <EVENT_ACCESS_KEY>
-{ "companyId": "<uuid>", "companyName": "Acme Recruiting" }
+{ "mobile": "9876543210", "password": "123456" }
 ```
+
+Or use the admin console at `/admin` (paste `ADMIN_KEY`
+once per browser tab).
 
 ### 7.3 Start / end / finalize
 
@@ -339,10 +346,12 @@ Scores after `endAt + 3s` are rejected
 
 | Audience | URL |
 |----------|-----|
-| Participant (join + score + share) | `https://test.amitverma01.dev/competition/<id>` |
+| Admin console | `https://test.amitverma01.dev/admin` |
+| Participant (mobile + PIN) | `https://test.amitverma01.dev/competition/<id>` |
 | Observer / TV | `https://test.amitverma01.dev/competition/<id>/live` |
 
-Participants enter **company ID + company name** only.
+Participants enter **mobile + join password** only
+(admin must have registered that mobile).
 
 ---
 
@@ -554,7 +563,7 @@ migrations unless coordinated.
 
 1. `GET /api/health/ready` → healthy  
 2. Admin create competition + round + set active round + start  
-3. Join with test `companyId` / `companyName` (UI or API)  
+3. Admin registers company + mobile; join with mobile / PIN  
 4. Signed `JOB_PUBLISHED` with that `company_id` → `scored: true`  
 5. Replay same `external_job_id` → `already_scored`  
 6. Open `/competition/<id>/live` — leaderboard updates  

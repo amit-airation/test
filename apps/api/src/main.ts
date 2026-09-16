@@ -20,6 +20,14 @@ async function bootstrap() {
   app.enableCors({
     origin: config.get<string>('CORS_ORIGIN', 'http://localhost:3000'),
     credentials: true,
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-admin-key',
+      'x-event-key',
+      'x-hirance-timestamp',
+      'x-hirance-signature',
+    ],
   });
 
   const port = config.get<number>('API_PORT', 3001);

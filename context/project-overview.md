@@ -14,8 +14,8 @@ Drafts, failed validation, failed publishes, deleted jobs,
 and incomplete jobs never increase the score.
 
 This server does **not** host login/JWT accounts or job CRUD.
-Identity is `companyId` + `companyName`. Scoring is via signed
-webhooks only.
+Identity is `companyId` + `companyName` (+ unique `mobile`
+for closed-roster join). Scoring is via signed webhooks only.
 
 ## Goals
 
@@ -32,9 +32,10 @@ webhooks only.
 ## Core User Flow
 
 1. Admin creates a competition and one or more rounds
-   (`x-admin-key`).
-2. Companies are registered or self-join with
-   `companyId` + `companyName` (`x-event-key`).
+   (`x-admin-key` or Next.js `/admin`).
+2. Admin registers companies with `companyId`,
+   `companyName`, and `mobile`. Participants join with
+   mobile + shared join PIN (`x-event-key`).
 3. Admin starts a round. NestJS sets `actualStartAt` /
    `endAt` and broadcasts `ROUND_STARTED`.
 4. Next.js clients receive a synchronized timer from

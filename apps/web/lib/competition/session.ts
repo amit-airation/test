@@ -5,6 +5,7 @@ const IDENTITY_KEY = 'hirance_identity';
 export type SessionIdentity = {
   companyId: string;
   companyName: string;
+  mobile?: string;
 };
 
 export function getIdentity(): SessionIdentity | null {
@@ -19,6 +20,7 @@ export function getIdentity(): SessionIdentity | null {
     return {
       companyId: parsed.companyId,
       companyName: parsed.companyName,
+      mobile: parsed.mobile,
     };
   } catch {
     return null;

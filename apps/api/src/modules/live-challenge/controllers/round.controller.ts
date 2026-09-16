@@ -103,7 +103,7 @@ export class RoundController {
     return this.roundService.listParticipants(roundId);
   }
 
-  /** Self-join for open rounds — participant provides their company info. */
+  /** Closed-roster join — mobile + competition PIN. Must be pre-registered. */
   @Post(':roundId/join')
   @UseGuards(EventKeyGuard)
   join(

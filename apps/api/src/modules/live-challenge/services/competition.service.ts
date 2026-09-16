@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import {
   CompetitionEventType,
@@ -10,6 +11,11 @@ import {
 } from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
 import { WS_EVENTS } from '../ws-events.js';
+import {
+  hashDefaultJoinPin,
+  hashJoinPin,
+  verifyJoinPin,
+} from '../utils/join-pin.js';
 import { CompetitionRealtimeService } from './competition-realtime.service.js';
 import { RoundLeaderboardService } from './round-leaderboard.service.js';
 import { RoundTimerService } from './round-timer.service.js';
@@ -32,6 +38,7 @@ export class CompetitionService {
           name: dto.name,
           description: dto.description,
           status: CompetitionStatus.DRAFT,
+          joinPinHash: hashDefaultJoinPin(),
         },
       });
       await tx.competitionEvent.create({
@@ -47,7 +54,28 @@ export class CompetitionService {
       event: 'competition_created',
       competition_id: competition.id,
     });
-    return competition;
+    return this.toPublicCompetition(competition);
+  }
+
+  async findAll() {
+    const competitions = await this.prisma.competition.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        _count: { select: { rounds: true } },
+      },
+    });
+
+    return competitions.map((c) => ({
+      id: c.id,
+      name: c.name,
+      description: c.description,
+      status: c.status,
+      activeRoundId: c.activeRoundId,
+      joinPinSet: Boolean(c.joinPinHash),
+      roundCount: c._count.rounds,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+    }));
   }
 
   async findOne(competitionId: string) {
@@ -74,6 +102,33 @@ export class CompetitionService {
     if (!competition)
       throw new NotFoundException(`Competition ${competitionId} not found`);
 
+    return this.toPublicCompetition(competition);
+  }
+
+  async updateJoinPin(competitionId: string, password: string) {
+    await this.requireCompetition(competitionId);
+    if (!password || password.length < 4) {
+      throw new BadRequestException('Join PIN must be at least 4 characters');
+    }
+
+    await this.prisma.competition.update({
+      where: { id: competitionId },
+      data: { joinPinHash: hashJoinPin(password) },
+    });
+
+    this.logger.log({
+      event: 'join_pin_updated',
+      competition_id: competitionId,
+    });
+
+    return { ok: true, joinPinSet: true };
+  }
+
+  async verifyJoinPin(competitionId: string, password: string) {
+    const competition = await this.requireCompetition(competitionId);
+    if (!verifyJoinPin(password, competition.joinPinHash)) {
+      throw new UnauthorizedException('Invalid join password');
+    }
     return competition;
   }
 
@@ -98,7 +153,7 @@ export class CompetitionService {
       event: 'competition_cancelled',
       competition_id: competitionId,
     });
-    return updated;
+    return this.toPublicCompetition(updated);
   }
 
   /**
@@ -124,7 +179,6 @@ export class CompetitionService {
       data: { activeRoundId: roundId },
     });
 
-    // Build the round payload for the WS event
     let roundPayload: {
       id: string;
       name: string | null;
@@ -161,7 +215,7 @@ export class CompetitionService {
       active_round_id: roundId,
     });
 
-    return updated;
+    return this.toPublicCompetition(updated);
   }
 
   async getLeaderboard(competitionId: string) {
@@ -172,6 +226,91 @@ export class CompetitionService {
       );
     }
     return this.leaderboard.getLeaderboard(competition.activeRoundId);
+  }
+
+  async listEvents(
+    competitionId: string,
+    query: {
+      eventType?: CompetitionEventType;
+      participantId?: string;
+      limit?: number;
+      offset?: number;
+    },
+  ) {
+    await this.requireCompetition(competitionId);
+
+    const limit = query.limit ?? 100;
+    const offset = query.offset ?? 0;
+
+    const where = {
+      competitionId,
+      ...(query.eventType ? { eventType: query.eventType } : {}),
+      ...(query.participantId
+        ? { roundParticipantId: query.participantId }
+        : {}),
+    };
+
+    const [total, events] = await this.prisma.$transaction([
+      this.prisma.competitionEvent.count({ where }),
+      this.prisma.competitionEvent.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip: offset,
+        include: {
+          roundParticipant: {
+            select: {
+              id: true,
+              companyId: true,
+              company: { select: { id: true, name: true, mobile: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    return {
+      total,
+      limit,
+      offset,
+      events: events.map((e) => ({
+        id: e.id,
+        competitionId: e.competitionId,
+        roundId: e.roundId,
+        roundParticipantId: e.roundParticipantId,
+        eventType: e.eventType,
+        metadata: e.metadata,
+        createdAt: e.createdAt,
+        participant: e.roundParticipant
+          ? {
+              id: e.roundParticipant.id,
+              companyId: e.roundParticipant.companyId,
+              companyName: e.roundParticipant.company.name,
+              mobile: e.roundParticipant.company.mobile,
+            }
+          : null,
+      })),
+    };
+  }
+
+  private toPublicCompetition<
+    T extends {
+      id: string;
+      name: string;
+      description: string | null;
+      status: CompetitionStatus;
+      activeRoundId: string | null;
+      joinPinHash?: string;
+      createdAt: Date;
+      updatedAt: Date;
+      rounds?: unknown;
+    },
+  >(competition: T) {
+    const { joinPinHash: _hash, ...rest } = competition;
+    return {
+      ...rest,
+      joinPinSet: Boolean(_hash),
+    };
   }
 
   private async requireCompetition(competitionId: string) {

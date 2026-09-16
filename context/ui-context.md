@@ -88,7 +88,9 @@ React Server Components.
 
 | Route                         | Audience        | Purpose                          |
 | ----------------------------- | --------------- | -------------------------------- |
-| `/competition/[id]`           | Participant     | Score, timer, create job, recents |
+| `/admin`                      | Operator        | Unlock + list/create competitions |
+| `/admin/[id]`                 | Operator        | Rounds, roster, PIN, events      |
+| `/competition/[id]`           | Participant     | Mobile+PIN join, score, timer    |
 | `/competition/[id]/live`      | Observer / TV   | Presentation leaderboard         |
 
 Follow the existing `app/` or `pages/` convention.
@@ -99,14 +101,17 @@ Follow the existing `app/` or `pages/` convention.
 
 ```text
 ┌─────────────────────────────────────────────┐
-│ 🏆 HIRANCE JOB CHALLENGE                    │
-│              ⏱ 04:32                       │
+│ HIRANCE JOB CHALLENGE                       │
+│              04:32                          │
 │ YOUR SCORE  12                              │
 │ Current Rank: #2                            │
-│            [ CREATE JOB ]                   │
+│ (jobs published on external job server)     │
 │ Recent Publications                         │
 └─────────────────────────────────────────────┘
 ```
+
+Join gate asks for **mobile** + **join password** only
+(admin pre-registers company id, name, and mobile).
 
 Must always show: competition active, time remaining,
 jobs published, current rank, leaderboard. No manual

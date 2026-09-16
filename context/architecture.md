@@ -36,11 +36,14 @@ Do not introduce TypeORM. Prisma 7 uses `prisma.config.ts`, the
   + display name)
 - Key guards — `ADMIN_KEY`, `EVENT_ACCESS_KEY`, webhook HMAC
 - Next.js `app/competition/[id]/` — participant UI
-  (score/rank/leaderboard; no job create)
+  (mobile + PIN join; score/rank/leaderboard; no job create)
 - Next.js `app/competition/[id]/live/` — observer / TV UI
+- Next.js `app/admin/` — operator console (`ADMIN_KEY` in
+  sessionStorage; never baked into the web image)
 - Next.js `components/competition/` — live widgets
+- Next.js `components/admin/` — admin console widgets
 - Next.js `lib/competition/` — API client, socket client,
-  shared types
+  shared types, admin session
 - LiveKit SFU — screen media only. NestJS mints short-lived
   room tokens; Next.js clients connect with `livekit-client`.
   Video never traverses Nest sockets.
@@ -89,8 +92,11 @@ src/prisma/prisma.service.ts
 ## Suggested Next.js surfaces
 
 ```text
+app/admin/page.tsx
+app/admin/[id]/page.tsx
 app/competition/[id]/page.tsx
 app/competition/[id]/live/page.tsx
+components/admin/
 components/competition/
 lib/competition/
 ```
@@ -139,20 +145,24 @@ reconcilable against the ledger.
   - HMAC (`x-hirance-timestamp` + `x-hirance-signature`) —
     job-server webhook only
 - Identity is **Company** (`id` = main-server UUID,
-  `name` for display). No `User` or `externalUserId`.
-- **Participant**: join with `companyId` + `companyName`,
-  view score/rank/leaderboard, optional screen share.
-  Cannot change score, rank, or timing. Publishes happen
-  on the external job server and are attributed by
+  `name` for display, unique `mobile` for join).
+  No `User` or `externalUserId`.
+- **Participant**: closed roster — admin registers
+  company + mobile; join with `mobile` + competition
+  join PIN (default `123456`). View score/rank/
+  leaderboard, optional screen share. Cannot change
+  score, rank, or timing. Publishes happen on the
+  external job server and are attributed by
   `company_id` on the webhook.
 - **External job server**: HMAC-signed ingest only. Cannot
   set score, rank, or timer. Must not use event/admin keys
   as a substitute for HMAC.
 - **Observer**: view competition, leaderboard, authorized
   screens with event key. Cannot publish or mutate state.
-- **Competition admin**: create, schedule, register,
-  start, cancel, end, finalize, disqualify, set active
-  round.
+- **Competition admin**: Next.js `/admin` (session
+  `ADMIN_KEY`) plus Nest admin APIs — create, schedule,
+  register (with mobile), start, cancel, end, finalize,
+  disqualify, set active round, set join PIN, audit events.
 - Next.js may hide unauthorized UI. Hiding UI is not
   authorization. NestJS guards remain the authority.
 - Permission-check every socket connection and room join.
@@ -161,6 +171,7 @@ reconcilable against the ledger.
 
 ```text
 DRAFT → SCHEDULED → LIVE → ENDED → FINALIZED
+         ↘ LIVE (admin start from DRAFT allowed)
 ```
 
 Invalid transitions are rejected (for example

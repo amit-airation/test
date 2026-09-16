@@ -4,14 +4,18 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
+  Query,
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
 import { RateLimit } from '../../../common/throttler/rate-limit.decorator.js';
 import { RATE_LIMIT_POLICIES } from '../../../common/throttler/rate-limit.policies.js';
 import { CreateCompetitionDto } from '../dto/create-competition.dto/create-competition.dto.js';
+import { QueryCompetitionEventsDto } from '../dto/query-competition-events.dto.js';
 import { SetActiveRoundDto } from '../dto/set-active-round.dto.js';
+import { UpdateJoinPinDto } from '../dto/update-join-pin.dto.js';
 import { CompetitionExceptionFilter } from '../filters/competition-exception/competition-exception.filter.js';
 import { AdminKeyGuard } from '../guards/admin-key/admin-key.guard.js';
 import { EventKeyGuard } from '../guards/event-key/event-key.guard.js';
@@ -27,6 +31,30 @@ export class CompetitionController {
   @UseGuards(AdminKeyGuard)
   create(@Body() dto: CreateCompetitionDto) {
     return this.competitionService.create(dto);
+  }
+
+  @Get()
+  @UseGuards(AdminKeyGuard)
+  findAll() {
+    return this.competitionService.findAll();
+  }
+
+  @Get(':id/events')
+  @UseGuards(AdminKeyGuard)
+  listEvents(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: QueryCompetitionEventsDto,
+  ) {
+    return this.competitionService.listEvents(id, query);
+  }
+
+  @Patch(':id/join-pin')
+  @UseGuards(AdminKeyGuard)
+  updateJoinPin(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateJoinPinDto,
+  ) {
+    return this.competitionService.updateJoinPin(id, dto.password);
   }
 
   @Get(':id')

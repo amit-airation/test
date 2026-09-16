@@ -112,11 +112,20 @@ const companies = [];
 for (let i = 0; i < PARTICIPANTS; i += 1) {
   const companyId = randomUUID();
   const companyName = `Load Co ${suffix}-${i}`;
+  const mobile = `8${String(suffix).slice(-4)}${String(i).padStart(6, '0')}`.slice(0, 11);
+  await json(
+    'POST',
+    `/competitions/${competition.id}/rounds/${round.id}/register`,
+    {
+      participants: [{ companyId, companyName, mobile }],
+    },
+    { admin: true },
+  );
   await json('POST', `/competitions/${competition.id}/rounds/${round.id}/join`, {
-    companyId,
-    companyName,
+    mobile,
+    password: process.env.JOIN_PIN ?? '123456',
   });
-  companies.push({ companyId, companyName });
+  companies.push({ companyId, companyName, mobile });
 }
 
 await json(

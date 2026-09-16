@@ -12,7 +12,11 @@ import { RoundTimerService } from './round-timer.service.js';
 import { ScreenShareService } from './screen-share.service.js';
 
 const ALLOWED_TRANSITIONS: Record<RoundStatus, RoundStatus[]> = {
-  [RoundStatus.DRAFT]: [RoundStatus.SCHEDULED, RoundStatus.CANCELLED],
+  [RoundStatus.DRAFT]: [
+    RoundStatus.SCHEDULED,
+    RoundStatus.LIVE,
+    RoundStatus.CANCELLED,
+  ],
   [RoundStatus.SCHEDULED]: [RoundStatus.LIVE, RoundStatus.CANCELLED],
   [RoundStatus.LIVE]: [RoundStatus.ENDED, RoundStatus.CANCELLED],
   [RoundStatus.ENDED]: [RoundStatus.FINALIZED],
