@@ -8,8 +8,4 @@ export class JoinRoundDto {
   @IsString()
   @MinLength(1)
   companyName!: string;
-
-  @IsString()
-  @MinLength(1)
-  displayName!: string;
 }

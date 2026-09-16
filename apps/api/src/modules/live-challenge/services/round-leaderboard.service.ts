@@ -37,7 +37,7 @@ export class RoundLeaderboardService {
       participants: participants.map((p, index) => ({
         rank: p.finalRank ?? index + 1,
         company_id: p.company.id,
-        display_name: p.displayName,
+        company_name: p.company.name,
         score: p.finalScore,
         status: p.status,
       })),

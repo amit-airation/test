@@ -1,11 +1,8 @@
 /**
- * Phase 8 load scenario — webhook scoring only.
- *
- * Simulates N participants scored via signed job-events plus O observer
- * WebSocket joins against a running API.
+ * Load scenario — webhook scoring only (company_id identity).
  *
  * Usage (API must already be running + migrated):
- *   EXTERNAL_JOB_WEBHOOK_SECRET=... ADMIN_EMAIL=... ADMIN_PASSWORD=... node scripts/load-competition.mjs
+ *   EXTERNAL_JOB_WEBHOOK_SECRET=... ADMIN_KEY=... EVENT_ACCESS_KEY=... node scripts/load-competition.mjs
  *   PARTICIPANTS=50 OBSERVERS=5 PUBLISHES_PER=2 ...
  */
 import { createHmac, randomUUID } from 'node:crypto';
@@ -14,6 +11,8 @@ import { io } from 'socket.io-client';
 const API = process.env.API_URL ?? 'http://localhost:3001/api';
 const WS = process.env.WS_URL ?? 'http://localhost:3001';
 const WEBHOOK_SECRET = process.env.EXTERNAL_JOB_WEBHOOK_SECRET;
+const ADMIN_KEY = process.env.ADMIN_KEY;
+const EVENT_KEY = process.env.EVENT_ACCESS_KEY ?? process.env.NEXT_PUBLIC_EVENT_KEY;
 const PARTICIPANTS = Number(process.env.PARTICIPANTS ?? 20);
 const OBSERVERS = Number(process.env.OBSERVERS ?? 5);
 const PUBLISHES_PER = Number(process.env.PUBLISHES_PER ?? 2);
@@ -21,18 +20,17 @@ const suffix = String(Date.now());
 
 const httpLatencies = [];
 
-if (!WEBHOOK_SECRET) {
-  throw new Error('Set EXTERNAL_JOB_WEBHOOK_SECRET for load-competition');
-}
+if (!WEBHOOK_SECRET) throw new Error('Set EXTERNAL_JOB_WEBHOOK_SECRET');
+if (!ADMIN_KEY) throw new Error('Set ADMIN_KEY');
+if (!EVENT_KEY) throw new Error('Set EVENT_ACCESS_KEY');
 
-async function json(method, path, body, token, headers = {}) {
+async function json(method, path, body, { admin = false } = {}) {
   const started = performance.now();
   const res = await fetch(`${API}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
+      ...(admin ? { 'x-admin-key': ADMIN_KEY } : { 'x-event-key': EVENT_KEY }),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
@@ -85,92 +83,55 @@ function summarize(label, samples) {
   };
 }
 
-async function provisionAdmin() {
-  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
-    return json('POST', '/auth/login', {
-      email: process.env.ADMIN_EMAIL,
-      password: process.env.ADMIN_PASSWORD,
-    });
-  }
-  const bootstrap = process.env.ADMIN_BOOTSTRAP_TOKEN;
-  if (!bootstrap) {
-    throw new Error(
-      'Set ADMIN_EMAIL/ADMIN_PASSWORD or ADMIN_BOOTSTRAP_TOKEN for load scripts',
-    );
-  }
-  return json(
-    'POST',
-    '/auth/admins',
-    {
-      email: `load-admin-${suffix}@hirance.test`,
-      password: 'password123',
-      name: 'Load Admin',
-    },
-    undefined,
-    { 'x-admin-bootstrap-token': bootstrap },
-  );
-}
-
 console.log(
   `load-competition: participants=${PARTICIPANTS} observers=${OBSERVERS} publishes_per=${PUBLISHES_PER}`,
 );
 
-const admin = await provisionAdmin();
-
 const competition = await json(
   'POST',
   '/competitions',
-  {
-    name: `Load ${suffix}`,
-    durationSeconds: 300,
-    allowOpenJoin: true,
-  },
-  admin.access_token,
+  { name: `Load ${suffix}` },
+  { admin: true },
 );
 
-const scheduledStartAt = new Date(Date.now() + 60_000).toISOString();
-await json(
+const round = await json(
   'POST',
-  `/competitions/${competition.id}/schedule`,
-  { scheduledStartAt },
-  admin.access_token,
-);
-await json(
-  'POST',
-  `/competitions/${competition.id}/start`,
-  {},
-  admin.access_token,
+  `/competitions/${competition.id}/rounds`,
+  { roundNumber: 1, name: 'Load Round', durationSeconds: 300 },
+  { admin: true },
 );
 
-const employers = [];
+await json(
+  'POST',
+  `/competitions/${competition.id}/active-round`,
+  { roundId: round.id },
+  { admin: true },
+);
+
+const companies = [];
 for (let i = 0; i < PARTICIPANTS; i += 1) {
-  const externalUserId = `ext-load-${suffix}-${i}`;
-  const user = await json('POST', '/auth/register', {
-    email: `load-p${i}-${suffix}@hirance.test`,
-    password: 'password123',
-    name: `P${i}`,
+  const companyId = randomUUID();
+  const companyName = `Load Co ${suffix}-${i}`;
+  await json('POST', `/competitions/${competition.id}/rounds/${round.id}/join`, {
+    companyId,
+    companyName,
   });
-  const company = await json(
-    'POST',
-    '/companies',
-    { name: `Load Co ${suffix}-${i}` },
-    user.access_token,
-  );
-  await json(
-    'POST',
-    `/competitions/${competition.id}/join`,
-    { companyId: company.id, externalUserId },
-    user.access_token,
-  );
-  employers.push({ user, company, externalUserId });
+  companies.push({ companyId, companyName });
 }
+
+await json(
+  'POST',
+  `/competitions/${competition.id}/rounds/${round.id}/start`,
+  {},
+  { admin: true },
+);
 
 const observerLatencies = [];
 const observers = [];
 for (let i = 0; i < OBSERVERS; i += 1) {
   const started = performance.now();
   const socket = io(`${WS}/competition`, {
-    auth: { token: admin.access_token },
+    auth: { eventKey: EVENT_KEY },
     transports: ['websocket'],
   });
   await new Promise((resolve, reject) => {
@@ -193,14 +154,15 @@ observers[0]?.on('SCORE_UPDATED', () => {
 });
 
 await Promise.all(
-  employers.flatMap(({ externalUserId }, idx) =>
+  companies.flatMap(({ companyId, companyName }, idx) =>
     Array.from({ length: PUBLISHES_PER }, (_, j) =>
       (async () => {
         const started = performance.now();
         await postJobEvent({
           event_id: randomUUID(),
           event: 'JOB_PUBLISHED',
-          external_user_id: externalUserId,
+          company_id: companyId,
+          company_name: companyName,
           external_job_id: `job-load-${suffix}-${idx}-${j}`,
           published_at: new Date().toISOString(),
           job: {
@@ -218,7 +180,7 @@ await Promise.all(
 
 await new Promise((r) => setTimeout(r, 1_500));
 
-const metrics = await json('GET', '/metrics', undefined, admin.access_token);
+const metrics = await json('GET', '/metrics', undefined, { admin: true });
 
 for (const socket of observers) socket.close();
 
@@ -226,6 +188,7 @@ console.log(
   JSON.stringify(
     {
       competition_id: competition.id,
+      round_id: round.id,
       http: summarize('all_http', httpLatencies),
       webhook_publish: summarize('job_events_webhook', publishLatencies),
       observer_join: summarize('observer_ws_join', observerLatencies),

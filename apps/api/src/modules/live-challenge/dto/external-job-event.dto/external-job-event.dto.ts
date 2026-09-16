@@ -41,6 +41,12 @@ export class ExternalJobEventDto {
   @MinLength(1)
   company_id!: string;
 
+  /** Optional display name refresh from the main server (never used for matching). */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  company_name?: string;
+
   @IsString()
   @MinLength(1)
   external_job_id!: string;

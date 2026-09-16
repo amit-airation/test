@@ -135,12 +135,11 @@ model Round {
 }
 
 /// A participant within a specific round.
-/// Identity = the company (sourced from the main server) + a human-readable display name.
+/// Identity = Company (id + name from the main Hirance server).
 model RoundParticipant {
   id              String            @id @default(uuid())
   roundId         String
   companyId       String
-  displayName     String
   status          ParticipantStatus @default(REGISTERED)
   joinedAt        DateTime?
   lastHeartbeatAt DateTime?

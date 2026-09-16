@@ -15,10 +15,6 @@ export class RoundParticipantEntryDto {
   @IsString()
   @MinLength(1)
   companyName!: string;
-
-  @IsString()
-  @MinLength(1)
-  displayName!: string;
 }
 
 export class RegisterRoundParticipantsDto {

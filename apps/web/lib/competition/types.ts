@@ -40,7 +40,7 @@ export type TimerSnapshot = {
 export type LeaderboardEntry = {
   rank: number;
   company_id: string;
-  display_name: string;
+  company_name: string;
   score: number;
   status?: string;
 };
@@ -52,7 +52,7 @@ export type ScoreUpdatedEvent = {
   participant: {
     id: string;
     company_id: string;
-    display_name: string;
+    company_name: string;
   };
   score: number;
   previous_score: number;

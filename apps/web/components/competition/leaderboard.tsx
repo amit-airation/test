@@ -34,7 +34,7 @@ export function Leaderboard({
                     #{row.rank}
                   </span>
                   <span className="font-medium text-foreground">
-                    {row.display_name}
+                    {row.company_name}
                     {isMe ? (
                       <span className="ml-1.5 text-xs text-primary-accent">
                         (you)

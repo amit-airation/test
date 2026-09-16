@@ -5,7 +5,6 @@ const IDENTITY_KEY = 'hirance_identity';
 export type SessionIdentity = {
   companyId: string;
   companyName: string;
-  displayName: string;
 };
 
 export function getIdentity(): SessionIdentity | null {
@@ -13,7 +12,14 @@ export function getIdentity(): SessionIdentity | null {
   const raw = window.localStorage.getItem(IDENTITY_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as SessionIdentity;
+    const parsed = JSON.parse(raw) as Partial<SessionIdentity> & {
+      displayName?: string;
+    };
+    if (!parsed.companyId || !parsed.companyName) return null;
+    return {
+      companyId: parsed.companyId,
+      companyName: parsed.companyName,
+    };
   } catch {
     return null;
   }

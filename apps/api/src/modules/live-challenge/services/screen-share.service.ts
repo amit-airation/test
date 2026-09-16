@@ -60,7 +60,7 @@ export class ScreenShareService {
   async issueToken(
     roundId: string,
     companyId: string | null,
-    displayName: string,
+    companyName: string,
     intent: ScreenShareIntent,
   ) {
     const livekit = this.requireConfig();
@@ -85,6 +85,7 @@ export class ScreenShareService {
       }
       const participant = await this.prisma.roundParticipant.findUnique({
         where: { roundId_companyId: { roundId, companyId } },
+        include: { company: { select: { name: true } } },
       });
       if (!participant) {
         throw new ForbiddenException(
@@ -95,6 +96,10 @@ export class ScreenShareService {
         throw new ForbiddenException(
           'Disqualified participants cannot share a screen',
         );
+      }
+      // Prefer stored company name when caller didn't pass one
+      if (!companyName || companyName === 'Observer') {
+        companyName = participant.company.name;
       }
     }
 
@@ -108,7 +113,7 @@ export class ScreenShareService {
 
     const token = new AccessToken(livekit.apiKey, livekit.apiSecret, {
       identity,
-      name: displayName,
+      name: companyName,
       ttl: ttlSeconds,
       metadata: JSON.stringify({ companyId, roundId, intent }),
     });

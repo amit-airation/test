@@ -152,7 +152,7 @@ export class RoundController {
     return this.roundService.issueScreenShareToken(
       roundId,
       dto.companyId ?? null,
-      dto.displayName ?? 'Observer',
+      dto.companyName ?? 'Observer',
       dto.intent,
     );
   }

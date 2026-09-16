@@ -708,10 +708,18 @@ backend owns scoring, the timer, and the leaderboard.
 
 Identity:
 
-* Store the job-server user id on `User.externalUserId` (unique, nullable).
-* Admins set it when registering a participant (`externalUserId` on
-  `POST /competitions/:id/register`). Participants may also send it on join.
-* The job server never sends this backend's user id. It sends its own.
+> **Competition-server attribution (implemented):** participants are
+> companies identified by the main server's company UUID. Store
+> `Company.id` + `Company.name`. Webhooks match on `company_id`
+> (optional `company_name` refreshes display only). There is no
+> `User.externalUserId` on this server.
+>
+> Scoring window: receive time must fall in
+> `[actualStartAt, endAt + 3 seconds]`. Duration between successive
+> scored webhooks is stored as `postDurationSeconds`.
+>
+> Historical monolith note (not used here): store a job-server user id
+> on `User.externalUserId` and match webhooks by `external_user_id`.
 
 Ingest:
 
@@ -742,7 +750,8 @@ Payload:
 {
   "event_id": "uuid",
   "event": "JOB_PUBLISHED",
-  "external_user_id": "hirance-user-123",
+  "company_id": "hirance-company-uuid",
+  "company_name": "Acme Recruiting",
   "external_job_id": "hirance-job-987",
   "published_at": "2026-09-14T10:21:32.412Z",
   "job": {
@@ -758,16 +767,16 @@ Also accepted: `"event": "JOB_UNPUBLISHED"` for delete / unpublish upstream.
 
 Resolution:
 
-1. Look up `User` by `externalUserId`.
-2. Find that user's currently `LIVE` participation. Zero matches is a no-op
-   (`no_live_competition`). More than one is a `409`.
-3. Eligibility uses **this backend's receive time** against `end_at`.
-   `published_at` from the job server is audit-only.
-4. Mirror the job into the existing `Job` table (`source = EXTERNAL`).
-5. Increment score through the transactional competition ledger.
+1. Look up `RoundParticipant` by `company_id` in a currently `LIVE` round.
+2. Zero matches is a no-op (`no_live_round`). More than one is a soft
+   no-op (`multiple_live_rounds`).
+3. Eligibility uses **this backend's receive time** against
+   `endAt + 3s`. `published_at` from the job server is audit-only.
+4. Mirror the job into the `Job` table (`source = EXTERNAL`).
+5. Increment score through the transactional `RoundJobScore` ledger.
 6. Broadcast `SCORE_UPDATED` / `LEADERBOARD_UPDATED` only after commit.
 
-Idempotency: `Job.externalJobId` is unique, and `CompetitionJobScore.jobId`
+Idempotency: `Job.externalJobId` is unique, and `RoundJobScore.jobId`
 is unique. A retried webhook scores at most once.
 
 Unpublish reverses the ledger (score floor 0) and archives the mirrored job.

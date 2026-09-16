@@ -1,27 +1,28 @@
 /**
- * Phase 8 WebSocket capacity probe (details.md §54 / Phase 8).
- *
- * Opens N authenticated admin observer sockets against one LIVE competition
- * and reports connect + join latency percentiles.
+ * WebSocket capacity probe — opens N event-key observer sockets.
  *
  * Usage:
- *   ADMIN_BOOTSTRAP_TOKEN=... node scripts/ws-capacity.mjs
- *   SOCKETS=100 ADMIN_BOOTSTRAP_TOKEN=... node scripts/ws-capacity.mjs
+ *   EVENT_ACCESS_KEY=... ADMIN_KEY=... node scripts/ws-capacity.mjs
+ *   SOCKETS=100 EVENT_ACCESS_KEY=... ADMIN_KEY=... node scripts/ws-capacity.mjs
  */
 import { io } from 'socket.io-client';
 
 const API = process.env.API_URL ?? 'http://localhost:3001/api';
 const WS = process.env.WS_URL ?? 'http://localhost:3001';
 const SOCKETS = Number(process.env.SOCKETS ?? 50);
+const ADMIN_KEY = process.env.ADMIN_KEY;
+const EVENT_KEY = process.env.EVENT_ACCESS_KEY ?? process.env.NEXT_PUBLIC_EVENT_KEY;
 const suffix = String(Date.now());
 
-async function json(method, path, body, token, headers = {}) {
+if (!ADMIN_KEY) throw new Error('Set ADMIN_KEY');
+if (!EVENT_KEY) throw new Error('Set EVENT_ACCESS_KEY');
+
+async function json(method, path, body, { admin = false } = {}) {
   const res = await fetch(`${API}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
+      ...(admin ? { 'x-admin-key': ADMIN_KEY } : { 'x-event-key': EVENT_KEY }),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -39,56 +40,13 @@ function percentile(sorted, p) {
   return sorted[idx];
 }
 
-async function provisionAdmin() {
-  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
-    return json('POST', '/auth/login', {
-      email: process.env.ADMIN_EMAIL,
-      password: process.env.ADMIN_PASSWORD,
-    });
-  }
-  const bootstrap = process.env.ADMIN_BOOTSTRAP_TOKEN;
-  if (!bootstrap) {
-    throw new Error(
-      'Set ADMIN_EMAIL/ADMIN_PASSWORD or ADMIN_BOOTSTRAP_TOKEN for ws-capacity',
-    );
-  }
-  return json(
-    'POST',
-    '/auth/admins',
-    {
-      email: `ws-admin-${suffix}@hirance.test`,
-      password: 'password123',
-      name: 'WS Admin',
-    },
-    undefined,
-    { 'x-admin-bootstrap-token': bootstrap },
-  );
-}
-
 console.log(`ws-capacity: sockets=${SOCKETS}`);
 
-const admin = await provisionAdmin();
 const competition = await json(
   'POST',
   '/competitions',
-  {
-    name: `WS Cap ${suffix}`,
-    durationSeconds: 300,
-    allowOpenJoin: true,
-  },
-  admin.access_token,
-);
-await json(
-  'POST',
-  `/competitions/${competition.id}/schedule`,
-  { scheduledStartAt: new Date(Date.now() + 60_000).toISOString() },
-  admin.access_token,
-);
-await json(
-  'POST',
-  `/competitions/${competition.id}/start`,
-  {},
-  admin.access_token,
+  { name: `WS Cap ${suffix}` },
+  { admin: true },
 );
 
 const connectMs = [];
@@ -100,7 +58,7 @@ await Promise.all(
   Array.from({ length: SOCKETS }, async () => {
     const started = performance.now();
     const socket = io(`${WS}/competition`, {
-      auth: { token: admin.access_token },
+      auth: { eventKey: EVENT_KEY },
       transports: ['websocket'],
     });
     try {
@@ -127,7 +85,12 @@ await Promise.all(
 connectMs.sort((a, b) => a - b);
 joinMs.sort((a, b) => a - b);
 
-const metrics = await json('GET', '/metrics');
+let metrics = null;
+try {
+  metrics = await json('GET', '/metrics', undefined, { admin: true });
+} catch {
+  metrics = null;
+}
 
 for (const socket of sockets) socket.close();
 
@@ -149,7 +112,7 @@ console.log(
         p99: Math.round(percentile(joinMs, 99)),
         max: Math.round(joinMs[joinMs.length - 1] ?? 0),
       },
-      metrics_websocket: metrics.websocket,
+      metrics_websocket: metrics?.websocket ?? null,
     },
     null,
     2,

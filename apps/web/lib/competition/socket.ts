@@ -24,12 +24,12 @@ export function joinCompetitionRoom(
   s: Socket,
   competitionId: string,
   companyId?: string,
-  displayName?: string,
+  companyName?: string,
 ) {
   return new Promise<void>((resolve) => {
     s.emit(
       'join_competition',
-      { competitionId, companyId, displayName },
+      { competitionId, companyId, companyName },
       () => resolve(),
     );
   });

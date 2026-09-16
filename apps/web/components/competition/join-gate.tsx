@@ -17,12 +17,10 @@ type JoinGateProps = {
 export function JoinGate({ competitionId, onReady }: JoinGateProps) {
   const [companyId, setCompanyId] = useState('');
   const [companyName, setCompanyName] = useState('');
-  const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(true);
 
-  // On mount: restore saved identity and silently re-join
   useEffect(() => {
     const saved = getIdentity();
     if (!saved) {
@@ -39,7 +37,6 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
         }
         onReady(saved);
       } catch {
-        // Saved identity invalid — show the form
         clearIdentity();
         setRestoring(false);
       }
@@ -58,10 +55,6 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
       setError('Company name is required');
       return;
     }
-    if (!displayName.trim()) {
-      setError('Display name is required');
-      return;
-    }
 
     setBusy(true);
     try {
@@ -77,7 +70,6 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
       const identity: SessionIdentity = {
         companyId: companyId.trim(),
         companyName: companyName.trim(),
-        displayName: displayName.trim(),
       };
 
       await joinRound(competitionId, roundId, identity);
@@ -102,7 +94,6 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
-        {/* Branding */}
         <div className="mb-8 text-center">
           <p className="text-xs font-bold uppercase tracking-[0.3em] text-primary-accent">
             Hirance
@@ -111,30 +102,12 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
             Live Challenge
           </h1>
           <p className="mt-2 text-sm text-muted-text">
-            Enter your details to join the competition.
+            Enter your company ID and name to join.
           </p>
         </div>
 
         <div className="rounded-2xl border border-border bg-surface p-7">
           <form onSubmit={submit} className="space-y-4" noValidate>
-            <div className="space-y-1">
-              <label
-                htmlFor="displayName"
-                className="block text-xs font-semibold uppercase tracking-wide text-muted-text"
-              >
-                Your name
-              </label>
-              <input
-                id="displayName"
-                required
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="e.g. Jane Smith"
-                autoComplete="name"
-                className="w-full rounded-xl border border-border bg-background px-4 py-3 text-base text-foreground placeholder:text-muted-text focus:border-primary-accent focus:outline-none"
-              />
-            </div>
-
             <div className="space-y-1">
               <label
                 htmlFor="companyId"
@@ -173,7 +146,10 @@ export function JoinGate({ competitionId, onReady }: JoinGateProps) {
             </div>
 
             {error ? (
-              <p className="rounded-lg bg-live-danger/10 px-3 py-2 text-sm text-live-danger" role="alert">
+              <p
+                className="rounded-lg bg-live-danger/10 px-3 py-2 text-sm text-live-danger"
+                role="alert"
+              >
                 {error}
               </p>
             ) : null}

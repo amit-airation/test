@@ -26,7 +26,7 @@ import { RoundTimerService } from '../services/round-timer.service.js';
 
 type SocketIdentity = {
   companyId?: string;
-  displayName?: string;
+  companyName?: string;
   isAdmin: boolean;
 };
 
@@ -165,7 +165,7 @@ export class CompetitionGateway
           ...client.data.identity,
           isAdmin: client.data.identity?.isAdmin ?? false,
           companyId: body.companyId,
-          displayName: body.displayName,
+          companyName: body.companyName,
         };
       }
 
@@ -243,6 +243,7 @@ export class CompetitionGateway
       if (companyId) {
         const participant = await this.prisma.roundParticipant.findUnique({
           where: { roundId_companyId: { roundId, companyId } },
+          include: { company: { select: { name: true } } },
         });
 
         if (participant) {
@@ -251,6 +252,7 @@ export class CompetitionGateway
             ...client.data.identity,
             isAdmin: client.data.identity?.isAdmin ?? false,
             companyId,
+            companyName: participant.company.name,
           };
 
           const { supersededSocketId } = await this.presence.claimSession(
@@ -276,7 +278,7 @@ export class CompetitionGateway
               round_id: roundId,
               participant_id: participant.id,
               company_id: companyId,
-              display_name: participant.displayName,
+              company_name: participant.company.name,
               reconnected,
             },
           );

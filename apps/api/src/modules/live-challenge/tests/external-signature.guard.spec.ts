@@ -9,7 +9,7 @@ const SECRET = 'webhook-secret-for-unit-tests-32ch';
 const BODY = JSON.stringify({
   event_id: '11111111-1111-1111-1111-111111111111',
   event: 'JOB_PUBLISHED',
-  external_user_id: 'hirance-user-123',
+  company_id: 'hirance-company-123',
   external_job_id: 'hirance-job-987',
 });
 

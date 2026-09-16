@@ -180,7 +180,7 @@ function GridTile({
       <VideoSurface track={screen.track} muted />
       <div className="px-3 py-2">
         <p className="truncate font-semibold text-foreground">
-          {participant?.display_name ?? screen.name}
+          {participant?.company_name ?? screen.name}
         </p>
         <p className="text-sm text-muted-text">
           {participant ? `${participant.score} jobs` : 'Sharing'}
@@ -201,7 +201,7 @@ function FocusTile({
     <div className="overflow-hidden rounded-3xl border border-border bg-surface">
       <div className="flex flex-wrap items-baseline justify-between gap-2 px-5 py-4">
         <p className="text-xl font-semibold text-foreground sm:text-3xl">
-          {participant?.display_name ?? screen.name}
+          {participant?.company_name ?? screen.name}
           {participant?.rank ? ` · #${participant.rank}` : ''}
         </p>
         {participant ? (

@@ -90,7 +90,6 @@ export function fetchRoundMe(
       id: string;
       status: string;
       company_id: string;
-      display_name: string;
       company_name: string;
       last_scored_at: string | null;
     };
@@ -102,7 +101,7 @@ export function fetchRoundMe(
 export function joinRound(
   competitionId: string,
   roundId: string,
-  body: { companyId: string; companyName: string; displayName: string },
+  body: { companyId: string; companyName: string },
 ) {
   return apiFetch(
     `/competitions/${competitionId}/rounds/${roundId}/join`,
@@ -127,7 +126,7 @@ export function fetchScreenShareToken(
   roundId: string,
   intent: 'publish' | 'watch',
   companyId?: string,
-  displayName?: string,
+  companyName?: string,
 ) {
   return apiFetch<{
     configured: boolean;
@@ -140,6 +139,6 @@ export function fetchScreenShareToken(
     expires_in_seconds: number;
   }>(`/competitions/${competitionId}/rounds/${roundId}/screen-share/token`, {
     method: 'POST',
-    body: JSON.stringify({ intent, companyId, displayName }),
+    body: JSON.stringify({ intent, companyId, companyName }),
   });
 }

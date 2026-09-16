@@ -1,449 +1,376 @@
-# Deployment & setup — Hirance Live Competition server
+# Production setup — Hirance Live Competition server
 
-This document covers **production/staging deployment**, environment
-configuration, and **external job-server integration**.
+Complete guide to deploy and operate the competition
+**scoring / leaderboard / realtime** server in staging or
+production.
 
-For a hands-on local webhook walkthrough (PowerShell), see
-[`LOCAL_TESTING.md`](./LOCAL_TESTING.md).
-
-Product rules and API semantics: [`details.md`](../details.md) §15 / §15.1.
+Local webhook walkthrough: [`LOCAL_TESTING.md`](./LOCAL_TESTING.md).  
+Product rules: [`details.md`](../details.md) §15 / §15.1.
 
 ---
 
-## 1. What this service is
+## 1. What you are deploying
 
-The competition monorepo is a **scoring / leaderboard / realtime** server.
+This monorepo is **not** the Hirance job catalog. It only:
 
-| This server owns | This server does **not** own |
-|------------------|------------------------------|
-| Competitions, timer, presence | Job create / edit / publish UI |
-| Scores & leaderboard | Authoritative job catalog |
-| WebSocket live updates | Job-server user accounts |
-| HMAC webhook ingest | |
-| Optional LiveKit screen-share tokens | Media SFU hosting (you run LiveKit) |
+| Owns | Does not own |
+|------|----------------|
+| Competitions, rounds, server timer | Job create / edit / publish UI |
+| Scores, leaderboard, presence | Authoritative job database |
+| Socket.IO live updates | User login / JWT accounts |
+| HMAC webhook ingest (`company_id`) | Hirance employer accounts |
+| LiveKit token minting (optional) | Media SFU hosting (Compose/LiveKit does) |
 
 ```text
-┌─────────────────────────┐   HMAC JOB_PUBLISHED    ┌──────────────────────────────┐
-│ Hirance job server      │ ───────────────────────►│ Competition API              │
-│ api.hirance.com         │                         │ api.test.amitverma01.dev     │
-│ (create / publish)      │                         │ NestJS /api + Socket.IO      │
-└─────────────────────────┘                         └──────────────┬───────────────┘
-                                                                   │
-                    ┌──────────────────────┐                       │
-                    │ Participant / TV UI  │ ◄── JWT + WS ─────────┤
-                    │ test.amitverma01.dev │                       │
-                    └──────────────────────┘                       ▼
-                                                        PostgreSQL + Redis
+┌──────────────────────────┐  HMAC JOB_PUBLISHED   ┌─────────────────────────────┐
+│ Hirance job server       │  company_id + job ───►│ Competition API (Nest)      │
+│ (create / publish jobs)  │                       │ /api + Socket.IO            │
+└──────────────────────────┘                       └──────────────┬──────────────┘
+                                                                  │
+                 ┌───────────────────────┐                        │
+                 │ Participant + TV UI   │◄── x-event-key + WS ───┤
+                 │ (Next.js)             │                        ▼
+                 └───────────────────────┘              PostgreSQL + Redis
                                                         (+ LiveKit optional)
+                                                        Nginx TLS edge
 ```
+
+**Identity:** company UUID + company name from the main
+job server. No `User`, no JWT, no `externalUserId`.
+
+**Scoring window:** receive time in
+`[actualStartAt, endAt + 3 seconds]`.
 
 ---
 
-## 2. Repository layout
+## 2. Public hosts (default staging)
 
-```text
-apps/api/     NestJS API (global prefix /api)
-apps/web/     Next.js participant + observer UI
-docker/nginx/        reverse-proxy image + templates
-docker/livekit/      staging LiveKit SFU config
-docker-compose.yml   postgres, redis, livekit, api, web, nginx
-docs/LOCAL_TESTING.md
-docs/DEPLOYMENT.md   ← this file
-```
+| Role | URL |
+|------|-----|
+| Competition UI | `https://test.amitverma01.dev` |
+| API + Socket.IO | `https://api.test.amitverma01.dev` |
+| LiveKit signaling | `wss://live.test.amitverma01.dev` |
+| Job-server webhook target | `POST https://api.test.amitverma01.dev/api/integrations/job-events` |
 
-Default ports (override with env):
-
-| Process | Default port |
-|---------|--------------|
-| API | `3001` (`API_PORT`) |
-| Web | `3000` |
-| Nginx (edge) | `80` / `443` — UI `test.amitverma01.dev`, API `api.test.amitverma01.dev` |
-| Postgres | `5432` |
-| Redis | `6379` |
-| LiveKit | `7880` |
+Override with `UI_SERVER_NAME` / `API_SERVER_NAME` /
+`LIVEKIT_SERVER_NAME` and matching DNS.
 
 ---
 
 ## 3. Prerequisites
 
-- Node.js 22+ (repo uses modern Nest / Next)
-- npm workspaces (root `package.json`)
-- Docker (Postgres + Redis; LiveKit optional)
-- Outbound HTTPS from the **job server** to this API’s public URL
-- Shared HMAC secret between job server and this API
+- Ubuntu EC2 (or similar) with Elastic IP, **or** any host
+  that can run Docker Compose
+- DNS A/AAAA for UI, API, and LiveKit hostnames → EIP
+- Docker Engine + Compose plugin (`npm run ec2:bootstrap`)
+- Outbound HTTPS from the **job server** to the competition API
+- Shared secrets: `ADMIN_KEY`, `EVENT_ACCESS_KEY`,
+  `EXTERNAL_JOB_WEBHOOK_SECRET` (each ≥ 32 chars in production)
+
+Security group / firewall inbound:
+
+| Port | Proto | Purpose |
+|------|-------|---------|
+| 22 | TCP | SSH (restrict to your IP) |
+| 80 | TCP | ACME + HTTP→HTTPS |
+| 443 | TCP | HTTPS (UI, API, LiveKit WSS) |
+| 7881 | TCP | LiveKit WebRTC (TCP fallback) |
+| 7882 | UDP | LiveKit WebRTC media |
 
 ---
 
-## 4. Environment reference
+## 4. Authentication model
 
-Copy [`.env.example`](../.env.example) into:
+There is **no** `/api/auth/*` and **no** JWT.
 
-- `apps/api/.env` — API runtime
-- `apps/web/.env.local` — browser-facing URLs only
+| Client | Credential | Header / mechanism |
+|--------|------------|--------------------|
+| Admin (create/start rounds) | `ADMIN_KEY` | `x-admin-key` |
+| Participant + observer UI / WS | `EVENT_ACCESS_KEY` | `x-event-key` or Socket.IO `auth.eventKey` |
+| Hirance job server | `EXTERNAL_JOB_WEBHOOK_SECRET` | HMAC `x-hirance-timestamp` + `x-hirance-signature` |
 
-### Required (API)
+Web build must embed the event key:
 
-| Variable | Purpose |
-|----------|---------|
-| `DATABASE_URL` | PostgreSQL connection string (Prisma 7) |
-| `REDIS_HOST` / `REDIS_PORT` | Presence, rate limits, Socket.IO adapter / Bull root |
-| `JWT_SECRET` | HTTP + WebSocket JWT (≥ 32 chars in production) |
-| `CORS_ORIGIN` | Explicit origin(s); no `*` in production |
-| `EXTERNAL_JOB_WEBHOOK_SECRET` | HMAC secret for job-events (≥ 32 chars in production) |
+```env
+NEXT_PUBLIC_EVENT_KEY=<same as EVENT_ACCESS_KEY>
+```
 
-### Strongly recommended (API)
+Never put `ADMIN_KEY` or the webhook secret in the browser bundle.
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `API_PORT` | `3001` | Listen port |
-| `EXTERNAL_JOB_WEBHOOK_SKEW_SECONDS` | `300` | Replay window for webhook timestamps |
-| `EXTERNAL_JOB_WEBHOOK_ENABLED` | `true` | Soft kill-switch (`false` → HTTP 503) |
-| `REQUIRE_EXTERNAL_USER_ID_ON_JOIN` | `false` | Force `externalUserId` on register/join |
-| `ADMIN_BOOTSTRAP_TOKEN` | empty | First-admin only; disable after bootstrap |
-| `THROTTLE_*` | see `.env.example` | Auth / competition / WS connect limits |
+---
 
-### Web (build + runtime)
+## 5. Environment (production)
 
-| Variable | Purpose |
-|----------|---------|
-| `NEXT_PUBLIC_API_URL` | e.g. `https://api.test.amitverma01.dev/api` |
-| `NEXT_PUBLIC_WS_URL` | e.g. `https://api.test.amitverma01.dev` (Socket.IO origin) |
+Copy [`.env.example`](../.env.example) to **repo-root `.env`**
+(Compose `env_file` for the API). Generate strong secrets:
 
-These are baked into the Next.js client bundle — set them for the **build**
-environment that produces the web image/artifacts.
+```bash
+openssl rand -hex 32   # run three times for the three keys
+```
 
-### Optional — screen share (LiveKit)
+### 5.1 Required — API (`.env`)
 
-| Variable | Purpose |
-|----------|---------|
-| `LIVEKIT_URL` | Server SDK HTTP URL (Nest mints tokens / closes rooms) |
-| `LIVEKIT_PUBLIC_URL` | Browser WebSocket URL (`ws` / `wss`) |
-| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | Strong secrets in production |
+```env
+NODE_ENV=production
 
-Leave unset to disable screen share gracefully in the UI.
+# Compose overrides DATABASE_URL / REDIS_* inside the stack;
+# keep these for non-Compose runs and tooling.
+DATABASE_URL=postgresql://hirance:hirance@postgres:5432/hirance?schema=public
+REDIS_HOST=redis
+REDIS_PORT=6379
 
-### Production boot rules
+API_PORT=3001
+CORS_ORIGIN=https://test.amitverma01.dev
+
+ADMIN_KEY=<random-≥32-chars>
+EVENT_ACCESS_KEY=<random-≥32-chars>
+EXTERNAL_JOB_WEBHOOK_SECRET=<random-≥32-chars>
+EXTERNAL_JOB_WEBHOOK_ENABLED=true
+EXTERNAL_JOB_WEBHOOK_SKEW_SECONDS=300
+
+# Rate limits (optional overrides)
+THROTTLE_DEFAULT_TTL_MS=60000
+THROTTLE_DEFAULT_LIMIT=300
+THROTTLE_COMPETITION_TTL_MS=10000
+THROTTLE_COMPETITION_LIMIT=120
+```
+
+### 5.2 Required — Web (Compose build args / `.env`)
+
+```env
+NEXT_PUBLIC_API_URL=https://api.test.amitverma01.dev/api
+NEXT_PUBLIC_WS_URL=https://api.test.amitverma01.dev
+NEXT_PUBLIC_EVENT_KEY=<same as EVENT_ACCESS_KEY>
+```
+
+`NEXT_PUBLIC_*` are baked into the Next.js image at **build**
+time. Changing them requires `docker compose up -d --build web`
+(or a full rebuild).
+
+### 5.3 Optional — LiveKit screen share
+
+```env
+LIVEKIT_PUBLIC_URL=wss://live.test.amitverma01.dev
+LIVEKIT_API_KEY=<strong-key>
+LIVEKIT_API_SECRET=<strong-secret-≥32-chars>
+```
+
+Compose sets `LIVEKIT_URL=http://livekit:7880` for the API.
+Keys must match [`docker/livekit/livekit.staging.yaml`](../docker/livekit/livekit.staging.yaml)
+(or your production LiveKit config). Leave LiveKit unset only
+if you also remove/disable the service; weak `devkey`/`secret`
+values **fail production boot** when `LIVEKIT_URL` is set.
+
+### 5.4 Production boot rules
 
 With `NODE_ENV=production`, the API **refuses to start** if:
 
-- `JWT_SECRET` is missing/weak (`change-me`, short, etc.)
-- `CORS_ORIGIN` is missing or `*`
-- `EXTERNAL_JOB_WEBHOOK_SECRET` is missing or &lt; 32 characters
-- LiveKit is configured with weak/dev keys
+- `EVENT_ACCESS_KEY` missing or &lt; 32 characters
+- `ADMIN_KEY` missing or &lt; 32 characters
+- `EXTERNAL_JOB_WEBHOOK_SECRET` missing or &lt; 32 characters
+- `CORS_ORIGIN` missing or `*`
+- LiveKit enabled with weak/dev keys
 
-See `apps/api/src/config/security.config.ts`.
-
----
-
-## 5. Local setup (short)
-
-```bash
-# Infrastructure
-docker compose up -d postgres redis
-# optional: docker compose up -d livekit
-
-# API
-cd apps/api
-cp ../../.env.example .env   # then edit
-npx prisma migrate deploy
-npm run start:dev
-
-# Web
-cd apps/web
-echo "NEXT_PUBLIC_API_URL=http://localhost:3001/api" > .env.local
-echo "NEXT_PUBLIC_WS_URL=http://localhost:3001" >> .env.local
-npm run dev
-```
-
-First admin (once):
-
-```http
-POST /api/auth/admins
-Header: x-admin-bootstrap-token: <ADMIN_BOOTSTRAP_TOKEN>
-Body: { "email", "password", "name" }
-```
-
-After the first ADMIN exists, bootstrap is disabled — use an admin JWT to
-provision more admins.
-
-Detailed local webhook testing: [`LOCAL_TESTING.md`](./LOCAL_TESTING.md).
+See [`apps/api/src/config/security.config.ts`](../apps/api/src/config/security.config.ts).
 
 ---
 
-## 6. Staging / production deployment
+## 6. One-command Docker production stack
 
-### 6.1 Infrastructure
+Everything runs from the repo root via
+[`docker-compose.yml`](../docker-compose.yml):
 
-1. Provision **PostgreSQL 16+** and **Redis 7+** (managed or self-hosted).
-2. Ensure the API can reach both (private network preferred).
-3. Optionally provision a **LiveKit** cluster (not the docker `--dev` image).
-4. Put TLS termination in front of API + web (load balancer / **nginx** — see §6.7).
-5. Allow WebSocket upgrade on the API host (Socket.IO namespace `/competition`).
+`postgres` · `redis` · `livekit` · `api` · `web` · `nginx` · `certs`
 
-### 6.2 Database migrations
-
-Run from the API package against the target `DATABASE_URL`:
+### 6.1 Bootstrap host (once)
 
 ```bash
-cd apps/api
-npx prisma migrate deploy
-npx prisma generate   # CI/build image should already do this
+sudo bash scripts/ec2-bootstrap.sh
+# or: npm run ec2:bootstrap
+# log out/in so the docker group applies
 ```
 
-Do **not** use `prisma migrate dev` in production.
-
-### 6.3 Build & run API
+### 6.2 Configure secrets
 
 ```bash
-cd apps/api
-npm ci
-npx prisma generate
-npm run build
-NODE_ENV=production node dist/main.js
-# or: npm run start:prod
+cp .env.example .env
+# edit .env — set ADMIN_KEY, EVENT_ACCESS_KEY,
+# EXTERNAL_JOB_WEBHOOK_SECRET (≥32 each), CORS_ORIGIN,
+# NEXT_PUBLIC_*, LIVEKIT_* for production
 ```
 
-Health endpoints (no auth):
+### 6.3 Point DNS
+
+Create records for UI, API, and LiveKit hostnames → Elastic IP.
+Port **80** must be reachable for Let's Encrypt.
+
+### 6.4 Start stack + TLS
+
+```bash
+# Full build + start
+docker compose up -d --build
+# or: npm run up
+
+# Issue / renew Let's Encrypt SAN cert (nginx must be up)
+npm run ssl:cert:webroot
+docker exec hirance-nginx nginx -s reload
+
+# One-shot helper:
+# npm run edge:up:cert
+```
+
+Until a real cert exists, Compose generates a short-lived
+self-signed cert so nginx can start.
+
+### 6.5 Verify
+
+```bash
+curl -fsS https://api.test.amitverma01.dev/api/health/live
+curl -fsS https://api.test.amitverma01.dev/api/health/ready
+curl -fsSI https://test.amitverma01.dev | head -n 5
+```
 
 | Path | Meaning |
 |------|---------|
 | `GET /api/health/live` | Process up |
-| `GET /api/health/ready` | Postgres required; Redis down → `degraded` |
-| `GET /api/metrics` | In-process counters + alert hints |
+| `GET /api/health/ready` | Postgres required; Redis down → `degraded` (still 200) |
+| `GET /api/metrics` | In-process counters (admin/event key may apply depending on route wiring) |
 
-Configure load-balancer health checks on `/api/health/ready` (treat `503` as
-unhealthy; `degraded` with Redis down still returns 200 by design so scoring
-can continue).
+LB health checks: use `/api/health/ready` (treat `503` as unhealthy).
 
-### 6.4 Build & run web
+### 6.6 Migrations
 
-```bash
-cd apps/web
-# Set NEXT_PUBLIC_* for the public API/WS URLs before build
-npm ci
-npm run build
-npm run start   # or serve `.next` via your platform
-```
-
-### 6.5 Multi-instance API
-
-If you run more than one Nest replica:
-
-- Share the same `JWT_SECRET`, webhook secret, and Postgres.
-- Redis must be reachable from every instance (presence + Socket.IO adapter).
-- Sticky sessions are helpful but not a substitute for the Redis adapter.
-
-### 6.6 Suggested production env sketch
-
-```env
-NODE_ENV=production
-DATABASE_URL=postgresql://user:pass@db-host:5432/hirance?schema=public
-REDIS_HOST=redis-host
-REDIS_PORT=6379
-API_PORT=3001
-CORS_ORIGIN=https://test.amitverma01.dev
-JWT_SECRET=<random-40+-chars>
-EXTERNAL_JOB_WEBHOOK_SECRET=<random-40+-chars>
-EXTERNAL_JOB_WEBHOOK_ENABLED=true
-EXTERNAL_JOB_WEBHOOK_SKEW_SECONDS=300
-REQUIRE_EXTERNAL_USER_ID_ON_JOIN=true
-ADMIN_BOOTSTRAP_TOKEN=   # empty after first admin
-# LIVEKIT_* only if screen share is enabled
-```
-
-Web (build-time):
-
-```env
-NEXT_PUBLIC_API_URL=https://api.test.amitverma01.dev/api
-NEXT_PUBLIC_WS_URL=https://api.test.amitverma01.dev
-```
-
-Public hosts:
-
-| Role | Host |
-|------|------|
-| Competition UI | `https://test.amitverma01.dev` |
-| Competition API + Socket.IO | `https://api.test.amitverma01.dev` |
-| LiveKit (screen share) | `wss://live.test.amitverma01.dev` |
-| Hirance job server (external) | `https://api.hirance.com` |
-
-Job-server webhook target (configure on Hirance, not in this nginx):
-
-```text
-POST https://api.test.amitverma01.dev/api/integrations/job-events
-```
-
-### 6.7 Nginx reverse proxy (Docker)
-
-Image and templates live under [`docker/nginx/`](../docker/nginx/).
-
-| Host | Routes |
-|------|--------|
-| `test.amitverma01.dev` | `/` → Next.js |
-| `api.test.amitverma01.dev` | `/api/` → NestJS, `/socket.io/` → Socket.IO |
-| `live.test.amitverma01.dev` | `/` → LiveKit signaling (WSS) |
-| both/all (HTTP `:80`) | ACME webroot + redirect to HTTPS |
-
-WebRTC media for screen share uses the instance **UDP 7882** and
-**TCP 7881** directly (open in the EC2 security group). Signaling goes
-through nginx on `wss://live.test.amitverma01.dev`.
-
-`api.hirance.com` is **not** served by this stack — it is the external
-job server that calls our API webhook.
-
-HTTP `:80` redirects to HTTPS. TLS terminates on `:443`.
-
-#### Issue TLS certificate (Let's Encrypt)
-
-DNS for **`test.amitverma01.dev`**, **`api.test.amitverma01.dev`**, and
-**`live.test.amitverma01.dev`** must point at this host. Port **80** must be
-free for the first issue (standalone). One SAN certificate covers all three.
+API image / start path should run Prisma migrate. To apply
+manually against the Compose DB:
 
 ```bash
-# EC2 Ubuntu (default)
-npm run ssl:cert
-
-# Staging CA (safe while testing rate limits)
-npm run ssl:cert:staging
-
-# Renew while nginx is already up (ACME webroot) + reload
-npm run ssl:renew
+docker compose exec api npx prisma migrate deploy
+# or from host with DATABASE_URL pointed at published Postgres
 ```
 
-Defaults: domains
-`test.amitverma01.dev,api.test.amitverma01.dev,live.test.amitverma01.dev`,
-email `amitz.airation@gmail.com`. Override with `DOMAINS` / `EMAIL`
-or flags `--domains` / `--email`.
+Never use `prisma migrate dev` in production.
 
-Certs are written to:
-
-- `docker/nginx/certs/fullchain.pem`
-- `docker/nginx/certs/privkey.pem`
-
-(Let’s Encrypt account data stays under `docker/nginx/certbot/` — not
-committed.)
-
-#### Start the stack
-
-```bash
-docker compose up -d --build
-# or: npm run up
-# TLS after DNS: npm run edge:up:cert
-```
-
-Nginx proxies `api` / `web` / `livekit` on the Compose network. Temporary
-self-signed certs are created if `docker/nginx/certs/` is empty; replace
-with Let's Encrypt via `npm run ssl:cert:webroot`.
-
-Env vars substituted at nginx container start (`envsubst`):
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `API_UPSTREAM` | `host.docker.internal:3001` | Nest listen host:port |
-| `WEB_UPSTREAM` | `host.docker.internal:3000` | Next listen host:port |
-| `LIVEKIT_UPSTREAM` | `livekit:7880` | LiveKit signaling |
-| `UI_SERVER_NAME` | `test.amitverma01.dev` | UI `server_name` |
-| `API_SERVER_NAME` | `api.test.amitverma01.dev` | API `server_name` |
-| `LIVEKIT_SERVER_NAME` | `live.test.amitverma01.dev` | LiveKit `server_name` |
-
-### 6.8 Deploy on EC2 Ubuntu
-
-Assumes one Ubuntu EC2 instance with Elastic IP. Everything runs in
-`docker compose` (postgres, redis, livekit, api, web, nginx).
-
-1. **Security group** — inbound TCP `22` (your IP), `80`, `443`, `7881`;
-   UDP `7882`.
-2. **DNS** — `test.amitverma01.dev`, `api.test.amitverma01.dev`, and
-   `live.test.amitverma01.dev` → EIP.
-3. **Bootstrap Docker** (once):
-
-```bash
-sudo bash scripts/ec2-bootstrap.sh
-# log out/in so docker group applies
-```
-
-4. **App env** — repo-root `.env` (Compose `env_file` for the API).
-   `LIVEKIT_URL` is overridden in Compose to `http://livekit:7880`.
-
-```env
-CORS_ORIGIN=https://test.amitverma01.dev
-NEXT_PUBLIC_API_URL=https://api.test.amitverma01.dev/api
-NEXT_PUBLIC_WS_URL=https://api.test.amitverma01.dev
-LIVEKIT_PUBLIC_URL=wss://live.test.amitverma01.dev
-LIVEKIT_API_KEY=APIstaginghirance01
-LIVEKIT_API_SECRET=staging-livekit-api-secret-at-least-32-chars!!
-```
-
-Keys must match [`docker/livekit/livekit.staging.yaml`](../docker/livekit/livekit.staging.yaml).
-
-5. **Start everything:**
-
-```bash
-docker compose up -d --build
-# Let's Encrypt (nginx must be up; uses ACME webroot on :80)
-npm run ssl:cert:webroot
-docker exec hirance-nginx nginx -s reload
-```
-
-Or: `npm run edge:up:cert`.
-
-6. **TLS renew cron** (example, monthly):
+### 6.7 TLS renew cron
 
 ```cron
-0 3 1 * * cd /home/ubuntu/test && npm run ssl:renew >> /var/log/hirance-ssl-renew.log 2>&1
+0 3 1 * * cd /home/ubuntu/compettion && npm run ssl:renew >> /var/log/hirance-ssl-renew.log 2>&1
 ```
 
-Scripts (bash, EC2-oriented):
+### 6.8 Useful npm scripts
 
-| Script / npm | Purpose |
-|--------------|---------|
+| Script | Purpose |
+|--------|---------|
 | `npm run ec2:bootstrap` | Install Docker + open ufw 80/443/7881 + UDP 7882 |
-| `npm run up` | `docker compose up -d --build` (full stack) |
-| `npm run ssl:cert:webroot` | Let's Encrypt SAN via ACME webroot |
-| `npm run ssl:renew` | Webroot renew + nginx reload |
-| `npm run edge:up:cert` | Full stack + cert + reload |
+| `npm run up` | `docker compose up -d --build` |
 | `npm run down` | Stop the stack |
+| `npm run ssl:cert` | First-time Let's Encrypt (standalone) |
+| `npm run ssl:cert:webroot` | Cert while nginx is up (ACME webroot) |
+| `npm run ssl:renew` | Renew + nginx reload |
+| `npm run edge:up:cert` | Full stack + cert + reload |
 
-Windows note: `scripts/generate-ssl-cert.ps1` remains for local PowerShell;
-production npm scripts call the bash versions.
+Nginx envsubst defaults:
+
+| Variable | Default |
+|----------|---------|
+| `UI_SERVER_NAME` | `test.amitverma01.dev` |
+| `API_SERVER_NAME` | `api.test.amitverma01.dev` |
+| `LIVEKIT_SERVER_NAME` | `live.test.amitverma01.dev` |
 
 ---
 
-## 7. Job server integration
+## 7. Operator runbook (event day)
 
-### 7.1 Responsibilities
+Admin APIs require `x-admin-key: $ADMIN_KEY`.
+
+### 7.1 Create competition + round
+
+```http
+POST /api/competitions
+x-admin-key: <ADMIN_KEY>
+{ "name": "Live Job Challenge 2026" }
+
+POST /api/competitions/{competitionId}/rounds
+x-admin-key: <ADMIN_KEY>
+{ "roundNumber": 1, "name": "Round 1", "durationSeconds": 300 }
+
+POST /api/competitions/{competitionId}/active-round
+x-admin-key: <ADMIN_KEY>
+{ "roundId": "<roundId>" }
+```
+
+### 7.2 Roster companies
+
+Pre-register (recommended for events):
+
+```http
+POST /api/competitions/{competitionId}/rounds/{roundId}/register
+x-admin-key: <ADMIN_KEY>
+{
+  "participants": [
+    { "companyId": "<hirance-company-uuid>", "companyName": "Acme Recruiting" }
+  ]
+}
+```
+
+Or let companies self-join from the UI / API with
+`companyId` + `companyName` and `x-event-key`:
+
+```http
+POST /api/competitions/{competitionId}/rounds/{roundId}/join
+x-event-key: <EVENT_ACCESS_KEY>
+{ "companyId": "<uuid>", "companyName": "Acme Recruiting" }
+```
+
+### 7.3 Start / end / finalize
+
+```http
+POST .../rounds/{roundId}/schedule   { "scheduledStartAt": "..." }
+POST .../rounds/{roundId}/start
+POST .../rounds/{roundId}/end
+POST .../rounds/{roundId}/finalize
+```
+
+Timer authority is the API. Clients display
+`time_remaining_seconds` from snapshots / Socket.IO.
+Scores after `endAt + 3s` are rejected
+(`outside_scoring_window`).
+
+### 7.4 Screens for the room
+
+| Audience | URL |
+|----------|-----|
+| Participant (join + score + share) | `https://test.amitverma01.dev/competition/<id>` |
+| Observer / TV | `https://test.amitverma01.dev/competition/<id>/live` |
+
+Participants enter **company ID + company name** only.
+
+---
+
+## 8. Job-server integration
+
+### 8.1 Responsibilities
 
 | Actor | Responsibility |
 |-------|----------------|
-| Job server | Create/publish/unpublish jobs; call webhook on success |
-| Competition API | Attribute publish to a LIVE participant; score; broadcast |
-| Competition UI | Show score/rank/leaderboard; link `externalUserId` |
+| Job server | Publish/unpublish jobs; POST signed webhook on success |
+| Competition API | Match `company_id` → LIVE round participant; score; broadcast |
+| Competition UI | Score, rank, leaderboard, timer, screen share |
 
 The job server must **never**:
 
-- Send this API’s internal `User.id`
-- Trust client-side scores or timers
-- Call competition JWT endpoints for scoring
+- Send competition internal IDs other than its own company UUID
+- Trust client scores or timers
+- Use `ADMIN_KEY` / `EVENT_ACCESS_KEY` instead of HMAC
 
-### 7.2 Identity linking
+### 8.2 Identity
 
-1. Job server has its own user id (string), e.g. `hirance-user-123`.
-2. On competition register/join, store it as `User.externalUserId` (unique).
-3. Webhook body uses `external_user_id` = that same value.
-4. API resolves the user’s single **LIVE** `CompetitionParticipant`.
+1. Main server’s **company UUID** is `Company.id` on this API.
+2. Join/register stores `companyId` + `companyName`.
+3. Webhook body uses `company_id` (same UUID) for matching.
+4. Optional `company_name` refreshes display only — never used
+   to match.
 
-Linking options:
-
-- Admin: `POST /api/competitions/:id/register` with `externalUserId`
-- Participant: join UI field / `POST /api/competitions/:id/join` with `externalUserId`
-
-Set `REQUIRE_EXTERNAL_USER_ID_ON_JOIN=true` in production so unscored
-participants cannot silently join without a link.
-
-### 7.3 Endpoint
-
-Configure the Hirance job server (`https://api.hirance.com`) to POST to
-the competition API host:
+### 8.3 Endpoint
 
 ```http
 POST https://api.test.amitverma01.dev/api/integrations/job-events
@@ -452,32 +379,19 @@ x-hirance-timestamp: <unix-seconds>
 x-hirance-signature: <hex>   # or sha256=<hex>
 ```
 
-Path form (same route behind any public base URL):
+Requires `EXTERNAL_JOB_WEBHOOK_ENABLED=true`.
 
-```http
-POST /api/integrations/job-events
-Content-Type: application/json
-x-hirance-timestamp: <unix-seconds>
-x-hirance-signature: <hex>   # or sha256=<hex>
-```
-
-No JWT. Requires `EXTERNAL_JOB_WEBHOOK_ENABLED=true` and a configured secret.
-
-### 7.4 Signature algorithm
+### 8.4 Signature
 
 ```text
 payload   = `${x-hirance-timestamp}.${rawBodyUtf8}`
 signature = HMAC_SHA256_HEX(EXTERNAL_JOB_WEBHOOK_SECRET, payload)
 ```
 
-Rules:
+Sign the **exact** raw body you POST. Timestamp must fall
+within `EXTERNAL_JOB_WEBHOOK_SKEW_SECONDS` (default 300).
 
-- Sign the **exact raw body bytes** as received (same JSON string you POST).
-- Timestamp must be within `EXTERNAL_JOB_WEBHOOK_SKEW_SECONDS` of server time.
-- Prefer constant-time compare on the job-server side when verifying responses
-  is not required; this API verifies inbound signatures that way.
-
-#### Pseudocode (Node)
+#### Node example
 
 ```js
 import { createHmac } from 'node:crypto';
@@ -490,7 +404,7 @@ function sign(secret, timestampSeconds, rawBody) {
 
 async function notifyPublished({ secret, baseUrl, event }) {
   const rawBody = JSON.stringify(event);
-  const ts = Math.floor(Date.now() / 1000).toString();
+  const ts = String(Math.floor(Date.now() / 1000));
   const res = await fetch(`${baseUrl}/api/integrations/job-events`, {
     method: 'POST',
     headers: {
@@ -504,7 +418,7 @@ async function notifyPublished({ secret, baseUrl, event }) {
 }
 ```
 
-### 7.5 Event payloads
+### 8.5 Payloads
 
 #### `JOB_PUBLISHED`
 
@@ -512,7 +426,8 @@ async function notifyPublished({ secret, baseUrl, event }) {
 {
   "event_id": "11111111-1111-1111-1111-111111111111",
   "event": "JOB_PUBLISHED",
-  "external_user_id": "hirance-user-123",
+  "company_id": "hirance-company-uuid",
+  "company_name": "Acme Recruiting",
   "external_job_id": "hirance-job-987",
   "published_at": "2026-09-14T10:21:32.412Z",
   "job": {
@@ -526,143 +441,138 @@ async function notifyPublished({ secret, baseUrl, event }) {
 
 | Field | Required | Notes |
 |-------|----------|--------|
-| `event_id` | yes | UUID; stored in audit metadata (not the dedup key) |
+| `event_id` | yes | UUID; audit metadata |
 | `event` | yes | `JOB_PUBLISHED` or `JOB_UNPUBLISHED` |
-| `external_user_id` | yes | Job-server user id |
-| `external_job_id` | yes | Stable unique job id on job server; **idempotency key** |
-| `published_at` | no | Audit only; eligibility uses receive time vs `end_at` |
-| `job.*` | for publish | Validated like competition job fields |
+| `company_id` | yes | Main-server company UUID (**match key**) |
+| `company_name` | no | Display refresh only |
+| `external_job_id` | yes | Idempotency key |
+| `published_at` | no | Audit only; eligibility uses receive time |
+| `job.title` | for publish | Min 3 characters |
 
 #### `JOB_UNPUBLISHED`
 
-Same envelope with `"event": "JOB_UNPUBLISHED"`. Reverses the score ledger
-(floor 0) and archives the mirrored job. Rejected if competition is
-`FINALIZED`.
+Same envelope with `"event": "JOB_UNPUBLISHED"`. Reverses the
+ledger (floor 0). Blocked if the round is `FINALIZED`.
 
-### 7.6 Resolution & scoring rules
+### 8.6 Resolution rules
 
 On `JOB_PUBLISHED`:
 
-1. Find `User` where `externalUserId = external_user_id`.
-2. Find that user’s currently `LIVE` participation.
-   - 0 → not scored (`no_live_competition`)
-   - &gt;1 → HTTP `409` (`multiple_live_competitions`)
-3. Competition must be `LIVE` and receive-time must be before `end_at`.
-4. Upsert mirrored `Job` with `source = EXTERNAL`, `externalJobId` unique.
-5. Insert `CompetitionJobScore` (unique on `jobId`) and `finalScore += 1`.
-6. After commit, emit Socket.IO score/leaderboard events.
+1. Find `RoundParticipant` with `company_id` in a **LIVE** round.
+   - 0 → `no_live_round` (not scored)
+   - &gt;1 → `multiple_live_rounds` (not scored)
+2. Receive time must be in `[actualStartAt, endAt + 3s]`.
+3. Upsert mirrored `Job` (`source = EXTERNAL`).
+4. Insert `RoundJobScore` (unique on `jobId`); `finalScore += 1`;
+   store `postDurationSeconds` since previous score.
+5. After commit, emit Socket.IO score / leaderboard events.
 
-**Retries:** same `external_job_id` scores at most once
-(`already_scored` / `scored: false`).
+Retries with the same `external_job_id` score at most once
+(`already_scored`).
 
-### 7.7 Response shape
+### 8.7 Response
 
 ```json
 {
   "scored": true,
   "my_score": 12,
-  "competition_id": "uuid",
-  "reason": null,
-  "job_id": "uuid"
+  "round_id": "uuid",
+  "job_id": "uuid",
+  "post_duration_seconds": 14.2,
+  "reason": null
 }
 ```
 
-Common `reason` values:
-
 | reason | Meaning |
 |--------|---------|
-| `unknown_external_user` | No `User.externalUserId` match |
-| `no_live_competition` | User not in a LIVE competition |
+| `no_live_round` | Company not in a LIVE round |
+| `multiple_live_rounds` | Ambiguous LIVE membership |
+| `outside_scoring_window` | After `endAt + 3s` (or before start) |
 | `already_scored` | Idempotent retry |
-| `competition_ended` | Past `end_at` / not eligible |
-| `competition_not_live` | Status gate |
-| `competition_finalized` | Unpublish blocked |
-| `publish_rejected` | Validation / participant rules |
+| `publish_rejected` | Validation (e.g. short title) |
+| `round_finalized` | Unpublish blocked |
+| `job_owner_mismatch` | Unpublish company ≠ job owner |
 
-Treat HTTP `2xx` with `scored: false` as a handled business outcome (do not
-infinite-retry unless you fix identity/competition state). Retry on `5xx` /
-network errors with the **same** `external_job_id`.
+Treat `2xx` + `scored: false` as a handled business outcome.
+Retry `5xx` / network errors with the **same** `external_job_id`.
 
-### 7.8 When the job server should call
+### 8.8 When to call
 
 | Job-server event | Webhook |
 |------------------|---------|
 | Job successfully published | `JOB_PUBLISHED` |
-| Job unpublished / deleted / taken down | `JOB_UNPUBLISHED` |
-| Draft saved | **Do not call** |
-| Validation failure | **Do not call** |
+| Job unpublished / deleted | `JOB_UNPUBLISHED` |
+| Draft saved / validation failed | **Do not call** |
 
-### 7.9 Network & security checklist (job server)
+### 8.9 Job-server checklist
 
-- [ ] Store `EXTERNAL_JOB_WEBHOOK_SECRET` only in job-server secrets manager
-- [ ] POST only to HTTPS competition API URL
-  (`https://api.test.amitverma01.dev/api/integrations/job-events`)
+- [ ] Secret only in job-server secrets manager
+- [ ] HTTPS webhook URL only
 - [ ] Sign raw body; do not re-serialize after signing
-- [ ] Use NTP-synced clocks (skew window defaults to 5 minutes)
-- [ ] Idempotent retries with stable `external_job_id`
-- [ ] Never embed competition JWT in webhook calls
-- [ ] Log competition `reason` for support without logging the secret
-- [ ] Confirm `api.hirance.com` can reach `api.test.amitverma01.dev`
-  (firewall / allowlist if needed)
+- [ ] NTP-synced clocks
+- [ ] Stable `external_job_id` for retries
+- [ ] Send `company_id` (UUID), optional `company_name`
+- [ ] Never put JWT / admin / event keys on the webhook
+- [ ] Confirm network path job-server → competition API
 
 ---
 
-## 8. Competition operator runbook
+## 9. Multi-instance API
 
-1. Provision admin (`/api/auth/admins` once, then JWT).
-2. `POST /api/competitions` (admin).
-3. `POST /api/competitions/:id/schedule` then `/start` (or schedule automation).
-4. Register participants with `externalUserId`, or allow open join + UI link.
-5. Confirm job server can reach `/api/integrations/job-events`.
-6. During LIVE: monitor `/api/metrics` and structured logs
-   (`external_job_ingested`, `score_updated`, `realtime_score_broadcast_failed`).
-7. `POST .../end` then `/finalize` when finished.
+If you run more than one Nest replica outside Compose:
 
-Participant UI: `/competition/<id>`  
-Observer / TV: `/competition/<id>/live`
+- Share `ADMIN_KEY`, `EVENT_ACCESS_KEY`, webhook secret, Postgres
+- Every instance must reach the same Redis (presence + Socket.IO adapter)
+- Sticky sessions help but do not replace the Redis adapter
 
 ---
 
-## 9. Observability & alerts
+## 10. Observability & kill switches
 
-| Signal | Source | Suggest alert when |
-|--------|--------|--------------------|
-| API down | `/api/health/ready` → 503 | Postgres unreachable |
-| Redis down | ready `degraded` | Presence/session features impaired |
-| Publish failures | `/api/metrics` → `alerts.publish_failure_rate_high` | Elevated ingest validation failures |
-| Realtime gaps | `alerts.realtime_emit_failures` | Clients missing live updates (scores still in DB) |
-| Webhook auth | logs `401` on job-events | Secret mismatch / clock skew |
+| Signal | Source | Action |
+|--------|--------|--------|
+| API down | `/api/health/ready` → 503 | Postgres / process |
+| Redis down | ready `degraded` | Presence impaired; scores still in Postgres |
+| Publish failures | `/api/metrics`, logs | Check webhook secret, roster, window |
+| Realtime gaps | `realtime_emit_failures` | Scores in DB; clients may need reconnect |
+| Webhook `401` | Access logs | Secret mismatch / clock skew |
 
-There is no Datadog agent in-repo — scrape `/api/metrics` or ship Nest JSON
-logs to your platform.
-
----
-
-## 10. Rollback & kill switches
+Kill switches:
 
 | Switch | Effect |
 |--------|--------|
-| `EXTERNAL_JOB_WEBHOOK_ENABLED=false` | Ingest returns `503`; scores freeze at last committed values |
-| Scale API to 0 | Stops HTTP/WS; Postgres scores remain authoritative |
-| End competition | New publishes stop scoring after `end_at` / status gates |
+| `EXTERNAL_JOB_WEBHOOK_ENABLED=false` | Ingest `503`; scores frozen at last commit |
+| Scale API to 0 | Stops HTTP/WS; Postgres remains authoritative |
+| End + finalize round | Stops scoring; locks ranks |
 
-Redeploy previous API image + re-run is usually enough; avoid reversing
+Redeploy previous API image for rollback. Avoid reversing
 migrations unless coordinated.
 
 ---
 
 ## 11. Smoke after deploy
 
-1. `GET /api/health/ready` → ok  
-2. Admin login + create short open-join competition + start  
-3. Join participant with a test `externalUserId`  
-4. Job server (or signed curl) sends `JOB_PUBLISHED`  
-5. Confirm `scored: true` and UI/leaderboard update  
-6. Replay same `external_job_id` → `already_scored`  
+1. `GET /api/health/ready` → healthy  
+2. Admin create competition + round + set active round + start  
+3. Join with test `companyId` / `companyName` (UI or API)  
+4. Signed `JOB_PUBLISHED` with that `company_id` → `scored: true`  
+5. Replay same `external_job_id` → `already_scored`  
+6. Open `/competition/<id>/live` — leaderboard updates  
 7. Confirm `POST /api/jobs` is **404**
 
-Local equivalent: [`LOCAL_TESTING.md`](./LOCAL_TESTING.md) +  
-`npm run smoke:realtime -w api`.
+Automated (API up, keys set):
+
+```bash
+EXTERNAL_JOB_WEBHOOK_SECRET=... ADMIN_KEY=... EVENT_ACCESS_KEY=... \
+  npm run smoke:realtime -w api
+```
+
+Load:
+
+```bash
+EXTERNAL_JOB_WEBHOOK_SECRET=... ADMIN_KEY=... EVENT_ACCESS_KEY=... \
+  PARTICIPANTS=100 npm run load:competition -w api
+```
 
 ---
 
@@ -670,8 +580,9 @@ Local equivalent: [`LOCAL_TESTING.md`](./LOCAL_TESTING.md) +
 
 | Doc | Contents |
 |-----|----------|
-| [`LOCAL_TESTING.md`](./LOCAL_TESTING.md) | Local PowerShell webhook + UI test |
-| [`../docker/nginx/`](../docker/nginx/) | Nginx Docker image + proxy templates |
+| [`LOCAL_TESTING.md`](./LOCAL_TESTING.md) | Local PowerShell webhook + UI |
+| [`../docker/nginx/`](../docker/nginx/) | Nginx image + proxy templates |
+| [`../docker-compose.yml`](../docker-compose.yml) | Full stack |
 | [`../details.md`](../details.md) | Product + technical source of truth |
 | [`../context/architecture.md`](../context/architecture.md) | Boundaries & invariants |
 | [`../context/progress-tracker.md`](../context/progress-tracker.md) | Phase status |

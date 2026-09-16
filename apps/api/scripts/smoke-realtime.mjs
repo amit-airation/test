@@ -1,8 +1,10 @@
 /**
- * Smoke: competition lifecycle + webhook score → Socket.IO events.
+ * Smoke: round lifecycle + webhook score → Socket.IO events.
  *
- * Requires EXTERNAL_JOB_WEBHOOK_SECRET and ADMIN_EMAIL/ADMIN_PASSWORD
- * (or ADMIN_BOOTSTRAP_TOKEN for first admin).
+ * Requires:
+ *   EXTERNAL_JOB_WEBHOOK_SECRET
+ *   ADMIN_KEY
+ *   EVENT_ACCESS_KEY
  */
 import { createHmac, randomUUID } from 'node:crypto';
 import { io } from 'socket.io-client';
@@ -10,50 +12,28 @@ import { io } from 'socket.io-client';
 const API = process.env.API_URL ?? 'http://localhost:3001/api';
 const WS = process.env.WS_URL ?? 'http://localhost:3001';
 const WEBHOOK_SECRET = process.env.EXTERNAL_JOB_WEBHOOK_SECRET;
+const ADMIN_KEY = process.env.ADMIN_KEY;
+const EVENT_KEY = process.env.EVENT_ACCESS_KEY ?? process.env.NEXT_PUBLIC_EVENT_KEY;
 const suffix = String(Math.floor(Math.random() * 1_000_000));
-const externalUserId = `ext-smoke-${suffix}`;
+const companyId = randomUUID();
+const companyName = `Acme Smoke ${suffix}`;
 
-if (!WEBHOOK_SECRET) {
-  throw new Error('Set EXTERNAL_JOB_WEBHOOK_SECRET for smoke-realtime');
-}
+if (!WEBHOOK_SECRET) throw new Error('Set EXTERNAL_JOB_WEBHOOK_SECRET');
+if (!ADMIN_KEY) throw new Error('Set ADMIN_KEY');
+if (!EVENT_KEY) throw new Error('Set EVENT_ACCESS_KEY');
 
-async function json(method, path, body, token, headers = {}) {
+async function json(method, path, body, { admin = false } = {}) {
   const res = await fetch(`${API}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
+      ...(admin ? { 'x-admin-key': ADMIN_KEY } : { 'x-event-key': EVENT_KEY }),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`${method} ${path}: ${text}`);
   return text ? JSON.parse(text) : null;
-}
-
-async function provisionAdmin() {
-  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
-    return json('POST', '/auth/login', {
-      email: process.env.ADMIN_EMAIL,
-      password: process.env.ADMIN_PASSWORD,
-    });
-  }
-  const bootstrap = process.env.ADMIN_BOOTSTRAP_TOKEN;
-  if (!bootstrap) {
-    throw new Error('Set ADMIN_EMAIL/ADMIN_PASSWORD or ADMIN_BOOTSTRAP_TOKEN');
-  }
-  return json(
-    'POST',
-    '/auth/admins',
-    {
-      email: `smoke-admin-${suffix}@hirance.test`,
-      password: 'password123',
-      name: 'Smoke Admin',
-    },
-    undefined,
-    { 'x-admin-bootstrap-token': bootstrap },
-  );
 }
 
 async function postJobEvent(payload) {
@@ -76,44 +56,36 @@ async function postJobEvent(payload) {
   return text ? JSON.parse(text) : null;
 }
 
-const admin = await provisionAdmin();
-const employer = await json('POST', '/auth/register', {
-  email: `hr${suffix}@hirance.test`,
-  password: 'password123',
-  name: 'HR User',
-});
-
-const company = await json(
-  'POST',
-  '/companies',
-  { name: `Acme ${suffix}` },
-  employer.access_token,
-);
-
-const comp = await json(
+const competition = await json(
   'POST',
   '/competitions',
-  { name: `P3 ${suffix}`, durationSeconds: 300, allowOpenJoin: true },
-  admin.access_token,
+  { name: `Smoke ${suffix}` },
+  { admin: true },
 );
 
-const scheduledStartAt = new Date(Date.now() + 5 * 60_000).toISOString();
-await json(
+const round = await json(
   'POST',
-  `/competitions/${comp.id}/schedule`,
-  { scheduledStartAt },
-  admin.access_token,
+  `/competitions/${competition.id}/rounds`,
+  { roundNumber: 1, name: 'Round 1', durationSeconds: 300 },
+  { admin: true },
 );
+
 await json(
   'POST',
-  `/competitions/${comp.id}/join`,
-  { companyId: company.id, externalUserId },
-  employer.access_token,
+  `/competitions/${competition.id}/active-round`,
+  { roundId: round.id },
+  { admin: true },
+);
+
+await json(
+  'POST',
+  `/competitions/${competition.id}/rounds/${round.id}/join`,
+  { companyId, companyName },
 );
 
 const seen = [];
 const socket = io(`${WS}/competition`, {
-  auth: { token: employer.access_token },
+  auth: { eventKey: EVENT_KEY },
   transports: ['websocket'],
 });
 
@@ -124,12 +96,20 @@ await new Promise((resolve, reject) => {
 });
 
 const joinAck = await socket.emitWithAck('join_competition', {
-  competitionId: comp.id,
+  competitionId: competition.id,
+  companyId,
+  companyName,
 });
 console.log('JOIN_ACK', JSON.stringify(joinAck));
 
+await socket.emitWithAck('join_round', {
+  competitionId: competition.id,
+  roundId: round.id,
+  companyId,
+});
+
 for (const event of [
-  'COMPETITION_STARTED',
+  'ROUND_STARTED',
   'SCORE_UPDATED',
   'LEADERBOARD_UPDATED',
   'JOB_PUBLISHED',
@@ -140,12 +120,18 @@ for (const event of [
   });
 }
 
-await json('POST', `/competitions/${comp.id}/start`, {}, admin.access_token);
+await json(
+  'POST',
+  `/competitions/${competition.id}/rounds/${round.id}/start`,
+  {},
+  { admin: true },
+);
 
 const ingest = await postJobEvent({
   event_id: randomUUID(),
   event: 'JOB_PUBLISHED',
-  external_user_id: externalUserId,
+  company_id: companyId,
+  company_name: companyName,
   external_job_id: `job-smoke-${suffix}`,
   published_at: new Date().toISOString(),
   job: {
@@ -162,10 +148,9 @@ await new Promise((r) => setTimeout(r, 1500));
 console.log(
   JSON.stringify({
     joinOk: joinAck?.ok === true,
-    joinStatus: joinAck?.status,
     scored: ingest?.scored === true,
     seen: [...new Set(seen)],
-    gotStarted: seen.includes('COMPETITION_STARTED'),
+    gotStarted: seen.includes('ROUND_STARTED'),
     gotScore: seen.includes('SCORE_UPDATED'),
     gotLeaderboard: seen.includes('LEADERBOARD_UPDATED'),
   }),

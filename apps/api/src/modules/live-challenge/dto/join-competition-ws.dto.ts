@@ -11,7 +11,7 @@ export class JoinCompetitionWsDto {
 
   @IsOptional()
   @IsString()
-  displayName?: string;
+  companyName?: string;
 }
 
 export class JoinRoundWsDto {

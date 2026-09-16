@@ -20,7 +20,7 @@ type ScreenShareControlsProps = {
   roundStatus: string | null;
   participantStatus?: string | null;
   companyId?: string | null;
-  displayName?: string;
+  companyName?: string;
   socket: Socket | null;
 };
 
@@ -39,7 +39,7 @@ export function ScreenShareControls({
   roundStatus,
   participantStatus,
   companyId,
-  displayName = 'Participant',
+  companyName = 'Participant',
   socket,
 }: ScreenShareControlsProps) {
   const roomRef = useRef<Room | null>(null);
@@ -101,7 +101,7 @@ export function ScreenShareControls({
         roundId,
         'publish',
         companyId ?? undefined,
-        displayName,
+        companyName,
       );
       const room = new Room({ adaptiveStream: true, dynacast: true });
       roomRef.current = room;

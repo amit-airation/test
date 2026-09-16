@@ -3,66 +3,70 @@
 ## Overview
 
 Hirance Live Job Creation Competition is a production-grade
-real-time feature for HRs, founders, and employers. Each
-participant gets a fixed window — initially 5 minutes — to
-create and successfully publish as many valid jobs as
-possible. The winner is the participant with the highest
-number of successfully published competition jobs when the
-competition ends.
+real-time scoring and leaderboard server for HRs, founders,
+and employers. Each company participant gets a fixed round
+window — initially 5 minutes — to publish as many valid jobs
+as possible on the external Hirance job server. The winner is
+the company with the highest number of successfully published
+jobs when the round ends.
 
 Drafts, failed validation, failed publishes, deleted jobs,
 and incomplete jobs never increase the score.
 
+This server does **not** host login/JWT accounts or job CRUD.
+Identity is `companyId` + `companyName`. Scoring is via signed
+webhooks only.
+
 ## Goals
 
-1. Run a timed, server-authoritative live competition
+1. Run timed, server-authoritative competition rounds
    without trusting client clocks or client scores.
 2. Count only successfully published, valid competition
    jobs, with concurrency-safe and idempotent scoring.
 3. Push live score, rank, timer, and leaderboard updates
    to participant and observer screens.
-4. Keep User and Company names for display on participant
-   and observer screens. Job create/publish lives on the
-   external Hirance job server; this API scores via webhook.
+4. Display company names on leaderboard / roster. Job
+   create/publish lives on the external Hirance job server;
+   this API scores via webhook matched by `company_id`.
 
 ## Core User Flow
 
-1. Admin creates and schedules a competition.
-2. HR / founder / employer participants register or are
-   added and join (optionally linking `externalUserId`).
-3. Competition starts. NestJS sets `actual_start_at` and
-   `end_at` and broadcasts `COMPETITION_STARTED`.
-4. All Next.js clients receive a synchronized timer from
+1. Admin creates a competition and one or more rounds
+   (`x-admin-key`).
+2. Companies are registered or self-join with
+   `companyId` + `companyName` (`x-event-key`).
+3. Admin starts a round. NestJS sets `actualStartAt` /
+   `endAt` and broadcasts `ROUND_STARTED`.
+4. Next.js clients receive a synchronized timer from
    server time.
-5. A participant publishes a job on the external job server.
+5. A company publishes a job on the external job server.
 6. That server POSTs a signed event to
-   `/api/integrations/job-events`. After the ingest
-   transaction commits, the score increments by 1 and
-   observers see a live update.
+   `/api/integrations/job-events` with `company_id`
+   (optional `company_name` for display refresh). After
+   the ingest transaction commits, score increments by 1
+   if receive time is within `[actualStartAt, endAt + 3s]`.
 7. Participants may disconnect and reconnect without
    resetting timer or score.
-8. At `end_at`, new publishes are rejected. Final scores,
-   deterministic ranking, and winner are stored and
-   displayed. The leaderboard becomes immutable.
+8. After `endAt + 3s`, new publishes are not scored.
+   Final scores, deterministic ranking, and winner are
+   stored. The leaderboard becomes immutable on finalize.
 
 ## Features
 
 ### Competition management
 
-- Draft, schedule, start, end, finalize, and cancel
-- Participant registration and membership checks
-- Server-authoritative timer
+- Draft, schedule, start, end, finalize, and cancel rounds
+- Participant registration / join by company id + name
+- Server-authoritative timer per round
 - Winner determination and immutable final results
 
 ### Scoring and jobs
 
-- Reuse the existing Job model with an optional
-  `competition` relation
-- Score = count of successfully published valid
-  competition jobs
+- Mirrored `Job` records from external webhooks
+- Score = count of successfully published valid jobs
+  in the round ledger (`RoundJobScore`)
 - Atomic, idempotent score updates
-- Competition-specific validation on top of normal
-  Hirance job rules
+- `postDurationSeconds` = time since previous scored job
 
 ### Real-time
 
@@ -72,17 +76,16 @@ and incomplete jobs never increase the score.
 
 ### Dashboards
 
-- Next.js participant competition page
-- Next.js observer / admin live dashboard
-- Full-screen / TV presentation mode
-- Optional WebRTC screen sharing (separate from scoring)
+- Next.js participant competition page (join + score)
+- Next.js observer / TV live dashboard
+- Optional LiveKit screen sharing (separate from scoring)
 
 ### Safety and operations
 
 - Audit trail
-- Anti-cheat / abuse controls
-- Rate limiting tuned for high-frequency publishing
-- Observability and load-test scenario
+- Key-based access (`ADMIN_KEY`, `EVENT_ACCESS_KEY`, HMAC)
+- Rate limiting
+- Observability and load-test scripts
 
 ## Scope
 
@@ -95,26 +98,24 @@ and incomplete jobs never increase the score.
   constraints
 - Redis for ephemeral realtime state and Socket.IO
   fan-out
-- BullMQ / existing workers for finalization,
-  notifications, reconciliation
+- BullMQ / existing workers for finalization where needed
 - Audit events, logging, tests, API and event docs
 
 ### Out of Scope
 
-- A second Job model or a second publish pipeline
+- Local job create / publish pipeline
+- User login / JWT / Passport auth
 - Streaming video through NestJS WebSockets
 - Treating Redis as the permanent score source
 - Putting scoring, timer authority, or publish rules in
   Next.js Route Handlers
 - Unrelated Hirance UI or architecture changes
-- Microservices unless the existing architecture already
-  requires them
 
 ## Success Criteria
 
 1. A published competition job increments score by 1 only
-   after the NestJS publish transaction commits.
-2. A publish after `end_at` is rejected and never counted.
+   after the NestJS ingest transaction commits.
+2. A publish after `endAt + 3s` is not scored.
 3. Retries and duplicate requests do not double-count a
    job.
 4. Disconnect / reconnect restores score, rank, and timer
@@ -124,4 +125,4 @@ and incomplete jobs never increase the score.
 6. After finalization, scores, ranks, and winner cannot
    change.
 7. The full acceptance scenario in `details.md` section 63
-   works end to end.
+   works end to end (with company_id attribution).

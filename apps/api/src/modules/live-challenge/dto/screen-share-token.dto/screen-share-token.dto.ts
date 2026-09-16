@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 
 export type ScreenShareIntent = 'publish' | 'watch';
 
@@ -11,8 +11,9 @@ export class ScreenShareTokenDto {
   @IsString()
   companyId?: string;
 
-  /** Display name shown in the screen share stage. */
+  /** Company name shown in the screen share stage. */
   @IsOptional()
   @IsString()
-  displayName?: string;
+  @MinLength(1)
+  companyName?: string;
 }

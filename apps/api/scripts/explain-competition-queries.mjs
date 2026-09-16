@@ -1,18 +1,16 @@
 /**
- * Phase 8 index review helper (details.md §41).
+ * Index review helper for round-based scoring.
  *
- * Prints EXPLAIN for the hottest competition query shapes. Run against a
- * populated competition id:
- *
- *   COMPETITION_ID=<uuid> node scripts/explain-competition-queries.mjs
+ *   COMPETITION_ID=<uuid> ROUND_ID=<uuid> node scripts/explain-competition-queries.mjs
  *
  * Requires DATABASE_URL and `psql` on PATH.
  */
 import { spawnSync } from 'node:child_process';
 
 const competitionId = process.env.COMPETITION_ID;
-if (!competitionId) {
-  console.error('Set COMPETITION_ID to a real competition UUID');
+const roundId = process.env.ROUND_ID;
+if (!competitionId || !roundId) {
+  console.error('Set COMPETITION_ID and ROUND_ID to real UUIDs');
   process.exit(1);
 }
 if (!process.env.DATABASE_URL) {
@@ -22,26 +20,26 @@ if (!process.env.DATABASE_URL) {
 
 const queries = [
   [
-    'leaderboard_order',
+    'round_leaderboard_order',
     `EXPLAIN (ANALYZE, BUFFERS)
      SELECT id, "finalScore", "scoreReachedAt"
-     FROM "CompetitionParticipant"
-     WHERE "competitionId" = '${competitionId}'
+     FROM "RoundParticipant"
+     WHERE "roundId" = '${roundId}'
      ORDER BY "finalScore" DESC, "scoreReachedAt" ASC NULLS LAST, "createdAt" ASC;`,
   ],
   [
-    'live_competitions_by_end',
+    'live_rounds_by_end',
     `EXPLAIN (ANALYZE, BUFFERS)
-     SELECT id FROM "Competition"
+     SELECT id FROM "Round"
      WHERE status = 'LIVE' AND "endAt" IS NOT NULL
      ORDER BY "endAt" ASC
      LIMIT 50;`,
   ],
   [
-    'competition_jobs_published',
+    'round_jobs_published',
     `EXPLAIN (ANALYZE, BUFFERS)
      SELECT id FROM "Job"
-     WHERE "competitionId" = '${competitionId}'
+     WHERE "roundId" = '${roundId}'
        AND status = 'PUBLISHED'
        AND "publishedAt" IS NOT NULL;`,
   ],
@@ -70,10 +68,11 @@ for (const [name, sql] of queries) {
 
 console.log(`
 Index review checklist (schema already includes):
-- Competition(status, scheduledStartAt) / (status, endAt)
-- CompetitionParticipant(competitionId, finalScore, scoreReachedAt)
-- Job(competitionId, status, createdById, publishedAt)
-- CompetitionEvent(competitionId, eventType, createdAt)
-- User.externalUserId UNIQUE
+- Round(competitionId, status)
+- RoundParticipant(roundId, finalScore, scoreReachedAt)
+- RoundParticipant(companyId)
+- Job(roundId, status) / (companyId, status) / (source, externalJobId)
+- RoundJobScore(roundId, participantId) / jobId UNIQUE
+- CompetitionEvent(competitionId, createdAt)
 Add new indexes only when EXPLAIN shows sequential scans under load.
 `);

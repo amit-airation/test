@@ -61,7 +61,7 @@ export class CompetitionRealtimeService {
     roundId: string;
     participantId: string;
     companyId: string;
-    displayName: string;
+    companyName: string;
     score: number;
     previousScore: number;
     jobId: string;
@@ -82,7 +82,7 @@ export class CompetitionRealtimeService {
         participant: {
           id: input.participantId,
           company_id: input.companyId,
-          display_name: input.displayName,
+          company_name: input.companyName,
         },
         score: input.score,
         previous_score: input.previousScore,
@@ -103,7 +103,7 @@ export class CompetitionRealtimeService {
         job_id: input.jobId,
         participant_id: input.participantId,
         company_id: input.companyId,
-        display_name: input.displayName,
+        company_name: input.companyName,
         score: input.score,
         post_duration_seconds: input.postDurationSeconds,
       });

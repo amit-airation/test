@@ -39,7 +39,7 @@ export type ScoreUpdatedPayload = {
   participant: {
     id: string;
     company_id: string;
-    display_name: string;
+    company_name: string;
   };
   score: number;
   previous_score: number;
@@ -57,7 +57,7 @@ export type LeaderboardUpdatedPayload = {
   participants: Array<{
     rank: number;
     company_id: string;
-    display_name: string;
+    company_name: string;
     score: number;
     status: string;
   }>;

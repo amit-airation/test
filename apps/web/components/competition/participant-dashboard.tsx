@@ -26,12 +26,11 @@ export function ParticipantDashboard({ competitionId }: ParticipantDashboardProp
   const live = useCompetitionSocket({
     competitionId,
     companyId: identity?.companyId,
-    displayName: identity?.displayName,
+    companyName: identity?.companyName,
     enabled: Boolean(identity),
   });
 
   // Show a brief banner when admin switches the active round
-  const prevActiveRoundRef = { current: live.activeRoundId };
   useEffect(() => {
     if (!live.roundNumber) return;
     setRoundTransition(`Round ${live.roundNumber} is now active`);
@@ -63,9 +62,7 @@ export function ParticipantDashboard({ competitionId }: ParticipantDashboardProp
               {live.competitionName ?? 'Competition'}
             </h1>
             <p className="mt-1 text-sm text-muted-text">
-              <span className="font-medium text-foreground">{identity.displayName}</span>
-              {' · '}
-              {identity.companyName}
+              <span className="font-medium text-foreground">{identity.companyName}</span>
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -121,7 +118,7 @@ export function ParticipantDashboard({ competitionId }: ParticipantDashboardProp
           roundStatus={live.roundStatus}
           participantStatus={live.participantStatus}
           companyId={identity.companyId}
-          displayName={identity.displayName}
+          companyName={identity.companyName}
           socket={live.socketRef.current}
         />
 

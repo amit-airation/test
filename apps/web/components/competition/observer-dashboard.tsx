@@ -14,29 +14,29 @@ import type { LeaderboardEntry, TimerSnapshot } from '@/lib/competition/types';
 
 type ObserverDashboardProps = { competitionId: string };
 
+function formatPostDuration(seconds: number | null | undefined) {
+  if (seconds == null || !Number.isFinite(seconds)) return null;
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  return `${Math.round(seconds)}s`;
+}
+
 export function ObserverDashboard({ competitionId }: ObserverDashboardProps) {
-  // Observers connect without a companyId — no presence session claimed
   const live = useCompetitionSocket({
     competitionId,
     enabled: true,
   });
 
-  // Local tab: which round tab is selected (may differ from live.activeRoundId)
   const [viewingRoundId, setViewingRoundId] = useState<string | null>(null);
-
-  // Cached leaderboards per round (so switching tabs shows frozen past results)
   const [cachedBoards, setCachedBoards] = useState<
     Record<string, { participants: LeaderboardEntry[]; timer: TimerSnapshot | null }>
   >({});
 
-  // Active round switching: auto-follow admin's choice
   useEffect(() => {
     if (live.activeRoundId) {
       setViewingRoundId(live.activeRoundId);
     }
   }, [live.activeRoundId]);
 
-  // When viewing a past round that isn't loaded yet, fetch its leaderboard
   useEffect(() => {
     if (!viewingRoundId || cachedBoards[viewingRoundId]) return;
     void fetchRoundLeaderboard(competitionId, viewingRoundId)
@@ -52,7 +52,6 @@ export function ObserverDashboard({ competitionId }: ObserverDashboardProps) {
       .catch(() => undefined);
   }, [viewingRoundId, cachedBoards, competitionId]);
 
-  // Always keep the live leaderboard in cache for the active round
   useEffect(() => {
     if (!live.activeRoundId) return;
     setCachedBoards((prev) => ({
@@ -74,23 +73,35 @@ export function ObserverDashboard({ competitionId }: ObserverDashboardProps) {
   const isViewedRoundLive = viewedRound?.status === 'LIVE';
 
   const highlightedId = live.lastScoreEvent?.participant.company_id;
+  const scoreFlashName = live.lastScoreEvent?.participant.company_name;
+  const scoreFlashDuration = formatPostDuration(
+    live.lastScoreEvent?.post_duration_seconds,
+  );
+  const urgent =
+    isViewingActive &&
+    isViewedRoundLive &&
+    (live.timer?.time_remaining_seconds ?? 31) <= 30;
 
   return (
-    <main className="min-h-screen bg-background p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-[1600px] flex-col gap-6">
-
-        {/* Header */}
-        <header className="flex flex-wrap items-center justify-between gap-5 rounded-3xl border border-border bg-surface px-5 py-4 sm:px-7">
+    <main className="min-h-screen bg-background">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1680px] flex-col gap-5 p-4 sm:p-6 lg:gap-6 lg:p-8">
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-4">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary-accent sm:text-sm">
-              Hirance live challenge
+            <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-primary-accent sm:text-xs">
+              Hirance
             </p>
-            <h1 className="mt-1 truncate text-2xl font-semibold text-foreground sm:text-4xl">
+            <h1 className="mt-1 truncate text-2xl font-semibold tracking-tight text-foreground sm:text-4xl">
               {live.competitionName ?? 'Live competition'}
             </h1>
+            {viewedRound ? (
+              <p className="mt-1 text-sm text-muted-text">
+                Round {viewedRound.round_number}
+                {viewedRound.name ? ` · ${viewedRound.name}` : ''}
+              </p>
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <StatusBadge status={live.roundStatus} />
+            <StatusBadge status={isViewingActive ? live.roundStatus : viewedRound?.status ?? null} />
             <FullscreenButton />
           </div>
         </header>
@@ -100,9 +111,8 @@ export function ObserverDashboard({ competitionId }: ObserverDashboardProps) {
           reconnecting={live.reconnecting}
         />
 
-        {/* Round tab bar */}
-        {live.allRounds.length > 0 ? (
-          <div className="flex flex-wrap gap-2" role="tablist">
+        {live.allRounds.length > 1 ? (
+          <div className="flex flex-wrap gap-2" role="tablist" aria-label="Rounds">
             {live.allRounds.map((r) => {
               const isActive = r.id === live.activeRoundId;
               const isSelected = r.id === viewingRoundId;
@@ -113,21 +123,15 @@ export function ObserverDashboard({ competitionId }: ObserverDashboardProps) {
                   role="tab"
                   aria-selected={isSelected}
                   onClick={() => setViewingRoundId(r.id)}
-                  className={`rounded-full px-4 py-1.5 text-sm font-semibold transition ${
+                  className={`rounded-lg px-3.5 py-1.5 text-sm font-semibold transition ${
                     isSelected
                       ? 'bg-primary-accent text-white'
                       : 'border border-border bg-surface text-muted-text hover:border-primary-accent hover:text-foreground'
                   }`}
                 >
                   Round {r.round_number}
-                  {r.name ? ` · ${r.name}` : ''}
                   {isActive && !isDone ? (
-                    <span className="ml-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-success align-middle" />
-                  ) : null}
-                  {isDone ? (
-                    <span className="ml-1.5 text-xs font-normal opacity-60">
-                      Final
-                    </span>
+                    <span className="ml-2 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-success align-middle" />
                   ) : null}
                 </button>
               );
@@ -135,69 +139,75 @@ export function ObserverDashboard({ competitionId }: ObserverDashboardProps) {
           </div>
         ) : null}
 
-        {/* Countdown — only for the active live round */}
         {isViewingActive && isViewedRoundLive ? (
           <section
-            className={`rounded-3xl border px-5 py-7 sm:px-8 ${
-              (live.timer?.time_remaining_seconds ?? 31) <= 30
+            className={`rounded-2xl border px-5 py-6 sm:px-8 sm:py-8 ${
+              urgent
                 ? 'border-live-danger/50 bg-live-danger/10'
                 : 'border-border bg-surface'
             }`}
           >
             <LiveCountdown timer={live.timer} status={live.roundStatus} />
+            {scoreFlashName && isViewingActive ? (
+              <p
+                key={live.lastScoreEvent?.job_id}
+                className="live-score-flash mt-4 text-center text-sm font-semibold text-success sm:text-base"
+                role="status"
+              >
+                +1 · {scoreFlashName}
+                {scoreFlashDuration ? ` · ${scoreFlashDuration} since last` : null}
+              </p>
+            ) : null}
           </section>
         ) : null}
 
-        {/* Final / waiting state label */}
         {isViewedRoundFinal ? (
           <div className="text-center">
-            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-success">
-              Leaderboard frozen
+            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-success">
+              Final results
             </p>
             <p className="mt-1 text-base text-muted-text">
-              {viewedRound?.name
-                ? `Official final ranking — ${viewedRound.name}`
-                : 'Official final ranking'}
+              Leaderboard is frozen for this round
             </p>
           </div>
         ) : isViewingActive && !isViewedRoundLive ? (
           <p className="text-center text-base text-muted-text">
             Waiting for the round to start…
           </p>
-        ) : isViewingActive ? (
-          <p className="text-center text-base text-muted-text">
-            Create and publish as many valid jobs as possible.
-          </p>
         ) : null}
 
-        {/* Podium */}
-        <LivePodium
-          key={`podium-${viewingRoundId}-${live.lastScoreEvent?.job_id ?? ''}`}
-          participants={viewedParticipants}
-          highlightedCompanyId={isViewingActive ? highlightedId : undefined}
-        />
+        <div className="grid flex-1 gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:gap-6">
+          <div className="flex flex-col gap-5 lg:gap-6">
+            <LivePodium
+              key={`podium-${viewingRoundId}-${live.lastScoreEvent?.job_id ?? ''}`}
+              participants={viewedParticipants}
+              highlightedCompanyId={isViewingActive ? highlightedId : undefined}
+            />
+            <LiveRanking
+              key={`ranking-${viewingRoundId}-${live.lastScoreEvent?.job_id ?? ''}`}
+              participants={viewedParticipants}
+              highlightedCompanyId={isViewingActive ? highlightedId : undefined}
+            />
+          </div>
 
-        {/* Full ranking */}
-        <LiveRanking
-          key={`ranking-${viewingRoundId}-${live.lastScoreEvent?.job_id ?? ''}`}
-          participants={viewedParticipants}
-          highlightedCompanyId={isViewingActive ? highlightedId : undefined}
-        />
+          {isViewingActive ? (
+            <ScreenShareStage
+              competitionId={competitionId}
+              roundId={live.activeRoundId}
+              roundStatus={live.roundStatus}
+              participants={live.leaderboard}
+            />
+          ) : (
+            <aside className="flex min-h-48 items-center justify-center rounded-2xl border border-dashed border-border bg-surface/60 px-6 text-center text-sm text-muted-text">
+              Select the active round to view live screen shares
+            </aside>
+          )}
+        </div>
 
-        {/* Screen share — only for the active live round */}
-        {isViewingActive ? (
-          <ScreenShareStage
-            competitionId={competitionId}
-            roundId={live.activeRoundId}
-            roundStatus={live.roundStatus}
-            participants={live.leaderboard}
-          />
-        ) : null}
-
-        <footer className="mt-auto flex flex-wrap items-center justify-between gap-2 px-2 pb-2 text-xs text-muted-text">
-          <span>Updates arrive automatically</span>
+        <footer className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-muted-text">
+          <span>Server-authoritative scores · live updates</span>
           <span role="status">
-            {live.connected ? 'Connected to live feed' : 'Restoring live feed…'}
+            {live.connected ? 'Live feed connected' : 'Restoring live feed…'}
           </span>
         </footer>
       </div>

@@ -28,14 +28,14 @@ import {
 type UseCompetitionSocketOptions = {
   competitionId: string;
   companyId?: string | null;
-  displayName?: string;
+  companyName?: string;
   enabled?: boolean;
 };
 
 export function useCompetitionSocket({
   competitionId,
   companyId,
-  displayName,
+  companyName,
   enabled = true,
 }: UseCompetitionSocketOptions) {
   const socketRef = useRef<Socket | null>(null);
@@ -136,7 +136,7 @@ export function useCompetitionSocket({
         socket,
         competitionId,
         companyId ?? undefined,
-        displayName,
+        companyName,
       );
     };
 
@@ -306,7 +306,7 @@ export function useCompetitionSocket({
       socket.off(WS_EVENTS.RANK_CHANGED, onRankChanged);
       void leaveCompetitionRoom(socket);
     };
-  }, [competitionId, companyId, displayName, enabled]);
+  }, [competitionId, companyId, companyName, enabled]);
 
   return {
     socketRef,

@@ -32,21 +32,18 @@ Do not introduce TypeORM. Prisma 7 uses `prisma.config.ts`, the
 - External job server — creates/publishes jobs; calls
   `POST /api/integrations/job-events` (HMAC) so this API
   can score. There is no local `/api/jobs` module.
-- Existing User / Company / CompanyMembership — identity
-  and display names on leaderboard / roster
-- Existing auth / Passport / JWT / session — HTTP and
-  WebSocket authentication
-- Existing notification / email infrastructure — scheduled,
-  started, ended, finalized, winner
-- Next.js `app/competition/[id]/` (or existing router) —
-  participant UI (score/rank/leaderboard; no job create)
+- `Company` — sole participant identity (main-server UUID
+  + display name)
+- Key guards — `ADMIN_KEY`, `EVENT_ACCESS_KEY`, webhook HMAC
+- Next.js `app/competition/[id]/` — participant UI
+  (score/rank/leaderboard; no job create)
 - Next.js `app/competition/[id]/live/` — observer / TV UI
 - Next.js `components/competition/` — live widgets
 - Next.js `lib/competition/` — API client, socket client,
   shared types
 - LiveKit SFU — screen media only. NestJS mints short-lived
-  room tokens; Next.js participant/observer clients connect
-  with `livekit-client`. Video never traverses Nest sockets.
+  room tokens; Next.js clients connect with `livekit-client`.
+  Video never traverses Nest sockets.
 
 Next.js is the UI layer only. NestJS owns scoring, timer
 authority, and authorization. Job CRUD lives on the
@@ -103,15 +100,14 @@ differs.
 
 ## Storage Model
 
-- **PostgreSQL via Prisma 7**: competitions, participants,
-  jobs with nullable `competitionId`, `User.externalUserId`,
-  `Job.externalJobId` / `Job.source`, audit events, final
-  scores, final ranks. This is the only source of truth
-  for score. External publishes are mirrored into `Job`
-  (`source = EXTERNAL`) so reconciliation still works.
-  Initialize with `npx prisma init
-  --datasource-provider postgresql`. Evolve with
-  `npx prisma migrate dev` and `npx prisma generate`.
+- **PostgreSQL via Prisma 7**: `Competition`, `Round`,
+  `Company`, `RoundParticipant`, `RoundJobScore`, mirrored
+  `Job` (`externalJobId` / `source`), `CompetitionEvent`
+  audit trail, final scores and ranks. This is the only
+  source of truth for score. External publishes are
+  mirrored into `Job` (`source = EXTERNAL`).
+  Evolve with `npx prisma migrate dev` and
+  `npx prisma generate`.
 - **Redis**: Socket.IO adapter fan-out, presence,
   heartbeat, short-lived leaderboard cache, optional
   locks, BullMQ backing store.
@@ -122,47 +118,44 @@ differs.
 Score conceptually:
 
 ```text
-COUNT(jobs)
-WHERE competition_id = X
-  AND created_by = participant
-  AND status = PUBLISHED
-  AND published_at IS NOT NULL
+COUNT(RoundJobScore)
+WHERE round_id = R
+  AND participant_id = P
 ```
+
+Plus receive-time window:
+`actualStartAt ≤ now ≤ endAt + 3s`.
 
 A cached participant counter is allowed only if it is
 updated transactionally, increment-idempotent, and
-reconcilable against Jobs.
+reconcilable against the ledger.
 
 ## Auth and Access Model
 
-- Authenticate HTTP and WebSocket with the existing
-  NestJS strategy (JWT, cookie, Passport, etc.).
-- Resolve company through existing CompanyMembership.
-  Do not duplicate membership logic.
-- **Participant**: view own competition, link
-  `externalUserId`, view score/rank/leaderboard. Cannot
-  change score, rank, or timing. Publishes happen on the
-  external job server and are attributed through
-  `User.externalUserId`.
+- No JWT / Passport / login. Access uses shared keys:
+  - `x-admin-key` (`ADMIN_KEY`) — competition admin APIs
+  - `x-event-key` (`EVENT_ACCESS_KEY`) — participant /
+    observer HTTP + Socket.IO
+  - HMAC (`x-hirance-timestamp` + `x-hirance-signature`) —
+    job-server webhook only
+- Identity is **Company** (`id` = main-server UUID,
+  `name` for display). No `User` or `externalUserId`.
+- **Participant**: join with `companyId` + `companyName`,
+  view score/rank/leaderboard, optional screen share.
+  Cannot change score, rank, or timing. Publishes happen
+  on the external job server and are attributed by
+  `company_id` on the webhook.
 - **External job server**: HMAC-signed ingest only. Cannot
-  set score, rank, or timer. Must not use participant JWT.
-- **Observer**: view competition, leaderboard, permitted
-  participant info, authorized screens. Cannot publish
-  or mutate competition state.
+  set score, rank, or timer. Must not use event/admin keys
+  as a substitute for HMAC.
+- **Observer**: view competition, leaderboard, authorized
+  screens with event key. Cannot publish or mutate state.
 - **Competition admin**: create, schedule, register,
-  start, cancel, end, finalize, disqualify, inspect audit,
-  view results.
-- Rosters are closed by default. `POST /competitions/:id/join`
-  admits only participants an admin registered unless the
-  competition sets `allowOpenJoin`. Public `/auth/register`
-  always creates an EMPLOYER; ADMIN comes only from
-  `POST /auth/admins`.
+  start, cancel, end, finalize, disqualify, set active
+  round.
 - Next.js may hide unauthorized UI. Hiding UI is not
-  authorization. NestJS guards and services remain the
-  authority.
+  authorization. NestJS guards remain the authority.
 - Permission-check every socket connection and room join.
-  A participant must not join another private participant
-  room.
 
 ## Competition lifecycle
 
@@ -299,6 +292,6 @@ Existing Prisma indexes cover the §41 query shapes:
 | Schedule start | `Competition(status, scheduledStartAt)` |
 | Competition jobs | `Job(competitionId, status, createdById, publishedAt)` |
 | Event timeline | `CompetitionEvent(competitionId, eventType, createdAt)` |
-| External user | `User.externalUserId` UNIQUE |
+| Company identity | `Company.id` (main-server UUID) PK; `Company.name` display |
 
 Use `explain:competition` under load before adding more.

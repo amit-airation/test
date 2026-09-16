@@ -125,6 +125,14 @@ export class ExternalJobIngestService {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
+      // Optional company name refresh from the main server (display only)
+      if (dto.company_name?.trim()) {
+        await tx.company.update({
+          where: { id: live.companyId },
+          data: { name: dto.company_name.trim() },
+        });
+      }
+
       // Upsert the mirrored job record
       const job = await tx.job.upsert({
         where: { externalJobId: dto.external_job_id },
@@ -162,13 +170,16 @@ export class ExternalJobIngestService {
       return { job, score };
     });
 
+    const companyName =
+      dto.company_name?.trim() || live.company.name;
+
     if (result.score.scored) {
       await this.realtime.emitScoreAndLeaderboard({
         competitionId: round.competitionId,
         roundId: round.id,
         participantId: live.id,
         companyId: live.companyId,
-        displayName: live.displayName,
+        companyName,
         score: result.score.finalScore,
         previousScore: result.score.finalScore - 1,
         jobId: result.job.id,
@@ -259,6 +270,7 @@ export class ExternalJobIngestService {
       where: {
         roundId_companyId: { roundId: job.roundId, companyId: dto.company_id },
       },
+      include: { company: { select: { name: true } } },
     });
     if (!participant) {
       await this.prisma.job.update({
@@ -299,7 +311,7 @@ export class ExternalJobIngestService {
         roundId: round.id,
         participantId: participant.id,
         companyId: participant.companyId,
-        displayName: participant.displayName,
+        companyName: participant.company.name,
         score: result.score.finalScore,
         previousScore: result.score.finalScore + 1,
         jobId: result.job.id,

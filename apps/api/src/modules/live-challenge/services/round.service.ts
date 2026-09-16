@@ -12,7 +12,6 @@ import {
 } from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
 import { DEFAULT_ROUND_DURATION_SECONDS } from '../constants.js';
-import { ParticipantAlreadyRegisteredException } from '../exceptions.js';
 import { WS_EVENTS } from '../ws-events.js';
 import { CompetitionRealtimeService } from './competition-realtime.service.js';
 import { RoundLeaderboardService } from './round-leaderboard.service.js';
@@ -127,7 +126,6 @@ export class RoundService {
     participants: Array<{
       companyId: string;
       companyName: string;
-      displayName: string;
     }>,
   ) {
     const round = await this.lifecycle.requireRound(roundId);
@@ -157,7 +155,6 @@ export class RoundService {
             data: {
               roundId,
               companyId: p.companyId,
-              displayName: p.displayName,
               status: ParticipantStatus.REGISTERED,
             },
           });
@@ -169,7 +166,7 @@ export class RoundService {
               eventType: CompetitionEventType.REGISTERED,
               metadata: {
                 companyId: p.companyId,
-                displayName: p.displayName,
+                companyName: p.companyName,
               },
             },
           });
@@ -213,7 +210,7 @@ export class RoundService {
    */
   async join(
     roundId: string,
-    dto: { companyId: string; companyName: string; displayName: string },
+    dto: { companyId: string; companyName: string },
   ) {
     const round = await this.lifecycle.requireRound(roundId);
 
@@ -252,7 +249,6 @@ export class RoundService {
           data: {
             roundId,
             companyId: dto.companyId,
-            displayName: dto.displayName,
             status:
               round.status === RoundStatus.LIVE
                 ? ParticipantStatus.ACTIVE
@@ -277,7 +273,6 @@ export class RoundService {
         where: { id: participant.id },
         data: {
           joinedAt: participant.joinedAt ?? new Date(),
-          displayName: dto.displayName,
           status:
             round.status === RoundStatus.LIVE
               ? ParticipantStatus.ACTIVE
@@ -291,7 +286,7 @@ export class RoundService {
       round_id: roundId,
       participant_id: participant.id,
       company_id: dto.companyId,
-      display_name: dto.displayName,
+      company_name: dto.companyName,
       status: participant.status,
     });
 
@@ -337,7 +332,6 @@ export class RoundService {
         id: participant.id,
         status: participant.status,
         company_id: participant.companyId,
-        display_name: participant.displayName,
         company_name: participant.company.name,
         last_scored_at: participant.lastScoredAt?.toISOString() ?? null,
       },
@@ -353,6 +347,7 @@ export class RoundService {
 
     const participant = await this.prisma.roundParticipant.findUnique({
       where: { id: participantId },
+      include: { company: { select: { id: true, name: true } } },
     });
     if (!participant || participant.roundId !== roundId) {
       throw new NotFoundException(
@@ -370,6 +365,7 @@ export class RoundService {
           status: ParticipantStatus.DISQUALIFIED,
           completedAt: new Date(),
         },
+        include: { company: { select: { id: true, name: true } } },
       });
       await tx.competitionEvent.create({
         data: {
@@ -390,7 +386,7 @@ export class RoundService {
         round_id: roundId,
         participant_id: participantId,
         company_id: updated.companyId,
-        display_name: updated.displayName,
+        company_name: updated.company.name,
         status: updated.status,
       },
     );
@@ -406,9 +402,9 @@ export class RoundService {
   issueScreenShareToken(
     roundId: string,
     companyId: string | null,
-    displayName: string,
+    companyName: string,
     intent: 'publish' | 'watch',
   ) {
-    return this.screenShare.issueToken(roundId, companyId, displayName, intent);
+    return this.screenShare.issueToken(roundId, companyId, companyName, intent);
   }
 }
