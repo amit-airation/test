@@ -153,13 +153,27 @@ time. Changing them requires `docker compose up -d --build web`
 LIVEKIT_PUBLIC_URL=wss://live.test.amitverma01.dev
 LIVEKIT_API_KEY=<strong-key>
 LIVEKIT_API_SECRET=<strong-secret-≥32-chars>
+# EC2 Elastic IP — required for WebRTC ICE behind Docker
+LIVEKIT_NODE_IP=<elastic-ip>
 ```
 
 Compose sets `LIVEKIT_URL=http://livekit:7880` for the API.
-Keys must match [`docker/livekit/livekit.staging.yaml`](../docker/livekit/livekit.staging.yaml)
-(or your production LiveKit config). Leave LiveKit unset only
-if you also remove/disable the service; weak `devkey`/`secret`
-values **fail production boot** when `LIVEKIT_URL` is set.
+Keys must match [`docker/livekit/livekit.staging.yaml`](../docker/livekit/livekit.staging.yaml).
+Browsers use WSS for signaling via nginx; **media** uses host
+ports **TCP 7881** and **UDP 7882** directly (open in the
+security group). If screen share shows
+`NegotiationError: negotiation timed out`, set
+`LIVEKIT_NODE_IP` to the Elastic IP and recreate LiveKit:
+
+```bash
+# in repo-root .env
+LIVEKIT_NODE_IP=$(curl -s https://checkip.amazonaws.com)
+docker compose up -d --force-recreate livekit
+```
+
+Leave LiveKit unset only if you also remove/disable the service;
+weak `devkey`/`secret` values **fail production boot** when
+`LIVEKIT_URL` is set.
 
 ### 5.4 Production boot rules
 

@@ -120,7 +120,9 @@ export function ScreenShareControls({
         }
       });
 
-      await room.connect(creds.url, creds.token);
+      await room.connect(creds.url, creds.token, {
+        peerConnectionTimeout: 20_000,
+      });
       await room.localParticipant.setScreenShareEnabled(true, { audio: true });
       setState('sharing');
       if (socket && roundId) void reportScreenShare(socket, true, roundId);
@@ -134,6 +136,12 @@ export function ScreenShareControls({
       }
       if (/unavailable/i.test(text)) { setState('unavailable'); return; }
       setState('error');
+      if (/negotiation|timeout|ICE|WebSocket/i.test(text)) {
+        setMessage(
+          'Screen share could not connect (WebRTC). Ask ops to open TCP 7881 + UDP 7882 to the LiveKit host, and set LIVEKIT_NODE_IP to the Elastic IP.',
+        );
+        return;
+      }
       setMessage(text);
     }
   };

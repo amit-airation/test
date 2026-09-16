@@ -44,15 +44,23 @@ services:
       retries: 10
 
   livekit:
-    image: livekit/livekit-server:v1.8.4
+    image: livekit/livekit-server:v1.9.2
     container_name: hirance-livekit
     restart: unless-stopped
-    command: --config /etc/livekit.yaml
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    environment:
+      LIVEKIT_CONFIG: /etc/livekit.yaml
+      # Set to your EC2 Elastic IP in .env for reliable ICE (recommended).
+      LIVEKIT_NODE_IP: ${LIVEKIT_NODE_IP:-}
     volumes:
       - ./docker/livekit/livekit.staging.yaml:/etc/livekit.yaml:ro
+      - ./docker/livekit/entrypoint.sh:/entrypoint.sh:ro
     ports:
       - "7881:7881"
       - "7882:7882/udp"
+    # Ensure outbound STUN / IP detect works from the container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   certs:
     image: alpine:3.20

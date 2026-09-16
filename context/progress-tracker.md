@@ -63,8 +63,12 @@ change.
 
 ## Session Notes
 
-- Admin: `https://test.amitverma01.dev/admin` (or local
-  `/admin`) — paste `ADMIN_KEY`.
+- Screen share on staging: set `LIVEKIT_NODE_IP` to the
+  EC2 Elastic IP, open SG TCP 7881 + UDP 7882, then
+  `docker compose up -d --force-recreate livekit`.
+  Negotiation timeout = ICE cannot reach media ports /
+  wrong advertised IP (not WSS signaling).
+- Admin: `/admin` — paste `ADMIN_KEY`.
 - Participant: `/competition/<id>` — mobile + PIN.
 - TV: `/competition/<id>/live`.
 - Local webhook walkthrough: [`docs/LOCAL_TESTING.md`](../docs/LOCAL_TESTING.md).
