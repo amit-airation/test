@@ -11,6 +11,7 @@ import {
 } from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
 import { InvalidRoundTransitionException } from '../exceptions.js';
+import { ROUND_PARTICIPANT_RANK_ORDER } from '../utils/rank-order.js';
 import { WS_EVENTS } from '../ws-events.js';
 import { CompetitionRealtimeService } from './competition-realtime.service.js';
 import { RoundTimerService } from './round-timer.service.js';
@@ -214,11 +215,7 @@ export class RoundLifecycleService {
     const updated = await this.prisma.$transaction(async (tx) => {
       const ranked = await tx.roundParticipant.findMany({
         where: { roundId },
-        orderBy: [
-          { finalScore: 'desc' },
-          { scoreReachedAt: 'asc' },
-          { createdAt: 'asc' },
-        ],
+        orderBy: [...ROUND_PARTICIPANT_RANK_ORDER],
       });
 
       for (let i = 0; i < ranked.length; i++) {

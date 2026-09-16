@@ -122,7 +122,8 @@ export function AdminHome({ onSignOut }: AdminHomeProps) {
         <section className="rounded-2xl border border-border bg-surface p-6">
           <p className="text-sm text-muted-text">
             Join PIN defaults to <code className="font-mono text-xs">123456</code>.
-            Change it on the competition console after create.
+            Change it on the competition console after create. Most published
+            jobs wins; earlier time to that count breaks ties.
           </p>
           <form onSubmit={create} className="mt-4 space-y-3" noValidate>
             <input

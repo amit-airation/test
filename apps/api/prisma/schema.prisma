@@ -150,6 +150,8 @@ model RoundParticipant {
   completedAt     DateTime?
   finalScore      Int               @default(0)
   finalRank       Int?
+  /// Time this participant reached their current score (webhook receive time).
+  /// Used for tie-break: earlier time ranks higher when scores are equal.
   scoreReachedAt  DateTime?
   /// Timestamp of this participant's last successfully scored webhook.
   /// Used to compute postDurationSeconds on subsequent scores.

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { CompetitionMetricsService } from '../../../common/observability/competition-metrics.service.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
+import { ROUND_PARTICIPANT_RANK_ORDER } from '../utils/rank-order.js';
 import { RoundTimerService } from './round-timer.service.js';
 
 @Injectable()
@@ -20,11 +21,7 @@ export class RoundLeaderboardService {
     const participants = await this.prisma.roundParticipant.findMany({
       where: { roundId },
       include: { company: { select: { id: true, name: true } } },
-      orderBy: [
-        { finalScore: 'desc' },
-        { scoreReachedAt: 'asc' },
-        { createdAt: 'asc' },
-      ],
+      orderBy: [...ROUND_PARTICIPANT_RANK_ORDER],
     });
 
     this.metrics.recordLeaderboardLatency(Date.now() - started);
@@ -40,6 +37,8 @@ export class RoundLeaderboardService {
         company_name: p.company.name,
         score: p.finalScore,
         status: p.status,
+        last_scored_at: p.lastScoredAt?.toISOString() ?? null,
+        score_reached_at: p.scoreReachedAt?.toISOString() ?? null,
       })),
     };
   }

@@ -17,6 +17,7 @@ import {
   assertValidMobile,
   verifyJoinPin,
 } from '../utils/join-pin.js';
+import { ROUND_PARTICIPANT_RANK_ORDER } from '../utils/rank-order.js';
 import { WS_EVENTS } from '../ws-events.js';
 import { CompetitionRealtimeService } from './competition-realtime.service.js';
 import { RoundLeaderboardService } from './round-leaderboard.service.js';
@@ -119,7 +120,7 @@ export class RoundService {
       include: {
         company: { select: { id: true, name: true, mobile: true } },
       },
-      orderBy: [{ finalScore: 'desc' }, { createdAt: 'asc' }],
+      orderBy: [...ROUND_PARTICIPANT_RANK_ORDER],
     });
   }
 
@@ -369,11 +370,7 @@ export class RoundService {
     // Compute rank from current leaderboard order
     const allParticipants = await this.prisma.roundParticipant.findMany({
       where: { roundId },
-      orderBy: [
-        { finalScore: 'desc' },
-        { scoreReachedAt: 'asc' },
-        { createdAt: 'asc' },
-      ],
+      orderBy: [...ROUND_PARTICIPANT_RANK_ORDER],
       select: { id: true },
     });
     const rankIndex = allParticipants.findIndex((p) => p.id === participant.id);
@@ -395,6 +392,7 @@ export class RoundService {
         company_name: participant.company.name,
         mobile: participant.company.mobile,
         last_scored_at: participant.lastScoredAt?.toISOString() ?? null,
+        score_reached_at: participant.scoreReachedAt?.toISOString() ?? null,
       },
     };
   }

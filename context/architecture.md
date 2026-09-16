@@ -142,9 +142,21 @@ WHERE round_id = R
 Plus receive-time window:
 `actualStartAt ≤ now ≤ endAt + 3s`.
 
+Ranking order:
+
+```text
+1. finalScore DESC
+2. scoreReachedAt ASC (nulls last)
+3. createdAt ASC
+```
+
 A cached participant counter is allowed only if it is
 updated transactionally, increment-idempotent, and
-reconcilable against the ledger.
+reconcilable against the ledger. Admin surfaces show
+`scoreReachedAt` / `lastScoredAt`; participant UI does not.
+Job server scores via one webhook URL:
+`POST /api/integrations/job-events` (`company_id`,
+`external_job_id`, `job.title` or `job.name`).
 
 ## Auth and Access Model
 

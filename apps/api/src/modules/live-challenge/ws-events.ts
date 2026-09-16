@@ -60,6 +60,8 @@ export type LeaderboardUpdatedPayload = {
     company_name: string;
     score: number;
     status: string;
+    last_scored_at?: string | null;
+    score_reached_at?: string | null;
   }>;
 };
 

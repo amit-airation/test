@@ -9,7 +9,8 @@ sequential rounds. Each company participant gets a fixed
 round window — initially 5 minutes — to publish as many
 valid jobs as possible on the external Hirance job server.
 The winner is the company with the highest number of
-successfully published jobs when the round ends.
+successfully published jobs when the round ends. If tied,
+earlier `scoreReachedAt` (webhook receive time) ranks higher.
 
 Drafts, failed validation, failed publishes, deleted jobs,
 and incomplete jobs never increase the score.
@@ -57,8 +58,9 @@ the admin UI and the job server.
 7. Participants may disconnect and reconnect without
    resetting timer or score (authoritative on the API).
 8. After `endAt + 3s`, new publishes are not scored.
-   Final scores, deterministic ranking, and winner are
-   stored. The leaderboard becomes immutable on finalize.
+   Ranking uses score DESC then `scoreReachedAt` ASC.
+   Winner and ranks are stored on finalize; the
+   leaderboard becomes immutable.
 
 ## Features
 
@@ -77,6 +79,9 @@ the admin UI and the job server.
   in the round ledger (`RoundJobScore`)
 - Atomic, idempotent score updates
 - `postDurationSeconds` = time since previous scored job
+- `scoreReachedAt` = time of reaching current score (tie-break)
+- Admin shows score + time reached / last webhook
+- Single job-server webhook: `POST /api/integrations/job-events`
 
 ### Real-time
 

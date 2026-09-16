@@ -10,7 +10,7 @@ Each participant gets a fixed amount of time, initially **5 minutes**, to create
 
 ### Winning rule
 
-> The participant with the highest number of successfully published competition jobs when the competition ends is the winner.
+> The participant with the highest number of successfully published competition jobs when the round ends is the winner. If tied on count, the earlier timestamp of reaching that score (webhook receive time / `scoreReachedAt`) wins.
 
 Only a **successfully published, valid competition job** counts toward the score.
 
@@ -976,28 +976,20 @@ Keep event contracts versionable and documented. Share TypeScript types between 
 Leaderboard ordering:
 
 ```text
-score DESC
-```
-
-Tie-breaking must be deterministic.
-
-Recommended tie-break:
-
-```text
-1. score DESC
-2. time_of_reaching_score ASC
+1. score DESC — most scored jobs
+2. score_reached_at ASC — earlier time of reaching that score
+3. created_at ASC — deterministic final tie-break
 ```
 
 For example:
 
 ```text
-Rahul = 10 jobs at 04:20
-Priya = 10 jobs at 04:45
-
-Rahul ranks higher.
+A = 25 jobs at 04:35
+B = 25 jobs at 04:42
+C = 25 jobs at 04:50
+D = 24 jobs at 04:55
+→ A, B, C, then D
 ```
-
-If product requirements later change, make the tie-break strategy configurable.
 
 Do not allow frontend sorting to determine the official ranking.
 
@@ -1888,9 +1880,10 @@ Store final results.
 Example:
 
 ```text
-🥇 Rahul    18 jobs
-🥈 Priya    16 jobs
-🥉 Amit     15 jobs
+🥇 A    25 jobs  (reached at 04:35)
+🥈 B    25 jobs  (reached at 04:42)
+🥉 C    25 jobs  (reached at 04:50)
+   D    24 jobs
 ```
 
 After finalization:
@@ -1906,27 +1899,27 @@ unless an explicit administrative correction workflow exists.
 
 # 52. Tie handling
 
-Implement a deterministic tie-breaking strategy.
-
-Recommended:
+Implement a deterministic ranking strategy.
 
 ```text
 Highest published job count
         ↓
-If tied:
-earlier timestamp reaching that score wins
+If tied on count:
+earlier scoreReachedAt (webhook receive time) wins
 ```
 
 Example:
 
 ```text
-Rahul  15 jobs at 04:31
-Priya  15 jobs at 04:47
-
-Rahul wins.
+A  25 jobs at 04:35  → wins
+B  25 jobs at 04:42  → second
+C  25 jobs at 04:50  → third
+D  24 jobs at 04:55  → fourth
 ```
 
-Document the rule in the UI before the competition starts.
+Unpublish reverses the ledger and recomputes `scoreReachedAt` from remaining scored jobs.
+
+Document the rule in the admin UI. Admin shows score + time reached / last webhook; participant UI stays screen-share only.
 
 ---
 

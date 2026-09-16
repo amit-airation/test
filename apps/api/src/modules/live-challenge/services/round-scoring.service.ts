@@ -12,6 +12,7 @@ export type ScorePublishResult = {
   scored: boolean;
   finalScore: number;
   scoreReachedAt: Date | null;
+  lastScoredAt: Date | null;
   participantId: string;
   postDurationSeconds: number | null;
 };
@@ -23,7 +24,7 @@ export class RoundScoringService {
   /**
    * Atomically records a scored publish inside the caller's transaction.
    * Idempotent: if jobId already exists in RoundJobScore the call is a no-op.
-   * Also computes and stores postDurationSeconds (time since previous scored job).
+   * Updates scoreReachedAt / lastScoredAt to webhook receive time.
    */
   async recordSuccessfulPublish(
     tx: Prisma.TransactionClient,
@@ -31,7 +32,6 @@ export class RoundScoringService {
     jobId: string,
     extraMetadata: Record<string, unknown> = {},
   ): Promise<ScorePublishResult> {
-    // Idempotency — check before insert to avoid P2002 inside a transaction
     const existingLedger = await tx.roundJobScore.findUnique({
       where: { jobId },
     });
@@ -49,12 +49,12 @@ export class RoundScoringService {
         scored: false,
         finalScore: participant.finalScore,
         scoreReachedAt: participant.scoreReachedAt,
+        lastScoredAt: participant.lastScoredAt,
         participantId: participant.id,
         postDurationSeconds: null,
       };
     }
 
-    // Post duration: elapsed time since this participant's previous scored job
     const lastScore = await tx.roundJobScore.findFirst({
       where: { roundId: ctx.round.id, participantId: ctx.participant.id },
       orderBy: { createdAt: 'desc' },
@@ -107,12 +107,14 @@ export class RoundScoringService {
       job_id: jobId,
       final_score: participant.finalScore,
       post_duration_seconds: postDurationSeconds,
+      score_reached_at: participant.scoreReachedAt?.toISOString() ?? null,
     });
 
     return {
       scored: true,
       finalScore: participant.finalScore,
       scoreReachedAt: participant.scoreReachedAt,
+      lastScoredAt: participant.lastScoredAt,
       participantId: participant.id,
       postDurationSeconds,
     };
@@ -134,6 +136,7 @@ export class RoundScoringService {
         scored: false,
         finalScore: participant.finalScore,
         scoreReachedAt: participant.scoreReachedAt,
+        lastScoredAt: participant.lastScoredAt,
         participantId: participant.id,
         postDurationSeconds: null,
       };
@@ -151,13 +154,34 @@ export class RoundScoringService {
       });
     }
 
+    const remaining = await tx.roundJobScore.findMany({
+      where: { roundId: ctx.round.id, participantId: ctx.participant.id },
+      orderBy: { createdAt: 'desc' },
+      take: 1,
+    });
+    const lastRemaining = remaining[0] ?? null;
+    const lastScoredAt = lastRemaining?.createdAt ?? null;
+    const scoreReachedAt = lastRemaining?.createdAt ?? null;
+
+    participant = await tx.roundParticipant.update({
+      where: { id: ctx.participant.id },
+      data: {
+        lastScoredAt,
+        scoreReachedAt,
+      },
+    });
+
     await tx.competitionEvent.create({
       data: {
         competitionId: ctx.round.competitionId,
         roundId: ctx.round.id,
         roundParticipantId: ctx.participant.id,
         eventType: CompetitionEventType.JOB_UNPUBLISHED,
-        metadata: { jobId, finalScore: participant.finalScore, ...extraMetadata },
+        metadata: {
+          jobId,
+          finalScore: participant.finalScore,
+          ...extraMetadata,
+        },
       },
     });
 
@@ -173,6 +197,7 @@ export class RoundScoringService {
       scored: true,
       finalScore: participant.finalScore,
       scoreReachedAt: participant.scoreReachedAt,
+      lastScoredAt: participant.lastScoredAt,
       participantId: participant.id,
       postDurationSeconds: null,
     };

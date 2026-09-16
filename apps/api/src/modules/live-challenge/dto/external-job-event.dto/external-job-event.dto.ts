@@ -12,9 +12,17 @@ import {
 import { EXTERNAL_JOB_EVENTS } from '../../constants.js';
 
 export class ExternalJobPayloadDto {
+  /** Job title / name — at least one of title or name required (min 3 chars). */
+  @IsOptional()
   @IsString()
   @MinLength(3)
-  title!: string;
+  title?: string;
+
+  /** Alias for title (job server may send "name"). */
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  name?: string;
 
   @IsOptional()
   @IsString()

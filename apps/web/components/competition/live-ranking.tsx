@@ -7,6 +7,19 @@ type LiveRankingProps = {
   highlightedCompanyId?: string;
 };
 
+function formatReached(iso: string | null | undefined) {
+  if (!iso) return null;
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, {
+      minute: '2-digit',
+      second: '2-digit',
+      hour: '2-digit',
+    });
+  } catch {
+    return null;
+  }
+}
+
 export function LiveRanking({ participants, highlightedCompanyId }: LiveRankingProps) {
   return (
     <section className="rounded-2xl border border-border bg-surface p-4 sm:p-6">
@@ -28,6 +41,7 @@ export function LiveRanking({ participants, highlightedCompanyId }: LiveRankingP
         ) : (
           participants.map((p) => {
             const highlighted = p.company_id === highlightedCompanyId;
+            const reached = formatReached(p.score_reached_at);
             return (
               <li
                 key={p.company_id}
@@ -43,8 +57,15 @@ export function LiveRanking({ participants, highlightedCompanyId }: LiveRankingP
                 <span className="min-w-0 flex-1 truncate text-base font-medium text-foreground sm:text-lg">
                   {p.company_name}
                 </span>
-                <span className="font-mono text-xl font-semibold tabular-nums text-foreground sm:text-2xl">
-                  {p.score}
+                <span className="text-right">
+                  <span className="block font-mono text-xl font-semibold tabular-nums text-foreground sm:text-2xl">
+                    {p.score}
+                  </span>
+                  {reached ? (
+                    <span className="block font-mono text-[10px] tabular-nums text-muted-text">
+                      {reached}
+                    </span>
+                  ) : null}
                 </span>
                 <span className="sr-only">published jobs</span>
               </li>

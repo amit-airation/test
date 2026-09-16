@@ -13,6 +13,19 @@ const PLACE = [
   { rank: 3, label: '3rd', order: 'order-2 lg:order-3', height: 'lg:min-h-48' },
 ] as const;
 
+function formatReached(iso: string | null | undefined) {
+  if (!iso) return null;
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, {
+      minute: '2-digit',
+      second: '2-digit',
+      hour: '2-digit',
+    });
+  } catch {
+    return null;
+  }
+}
+
 export function LivePodium({ participants, highlightedCompanyId }: LivePodiumProps) {
   return (
     <section aria-label="Top three companies">
@@ -21,6 +34,7 @@ export function LivePodium({ participants, highlightedCompanyId }: LivePodiumPro
           const participant = participants.find((e) => e.rank === place.rank);
           const highlighted = participant?.company_id === highlightedCompanyId;
           const isFirst = place.rank === 1;
+          const reached = formatReached(participant?.score_reached_at);
 
           return (
             <article
@@ -47,6 +61,11 @@ export function LivePodium({ participants, highlightedCompanyId }: LivePodiumPro
               <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
                 Jobs published
               </p>
+              {reached ? (
+                <p className="mt-1 font-mono text-xs tabular-nums text-muted-text">
+                  {reached}
+                </p>
+              ) : null}
               {highlighted ? (
                 <p
                   className="live-score-flash mt-3 text-sm font-semibold text-success"

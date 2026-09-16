@@ -14,6 +14,7 @@ import { CompetitionMetricsService } from '../../../common/observability/competi
 import { PrismaService } from '../../../prisma/prisma.service.js';
 import { EXTERNAL_JOB_EVENTS, INGEST_REASONS, ROUND_GRACE_PERIOD_MS } from '../constants.js';
 import type { ExternalJobEventDto } from '../dto/external-job-event.dto/external-job-event.dto.js';
+import { resolveJobTitle } from '../utils/job-title.js';
 import { CompetitionRealtimeService } from './competition-realtime.service.js';
 import { RoundScoringService } from './round-scoring.service.js';
 import { RoundTimerService } from './round-timer.service.js';
@@ -98,9 +99,9 @@ export class ExternalJobIngestService {
       };
     }
 
-    // Validate job fields
-    const title = dto.job?.title ?? '';
-    if (!title || title.trim().length < 3) {
+    // Validate job fields (title or name)
+    const title = resolveJobTitle(dto.job);
+    if (!title || title.length < 3) {
       await this.prisma.competitionEvent.create({
         data: {
           competitionId: round.competitionId,
@@ -111,7 +112,7 @@ export class ExternalJobIngestService {
             externalJobId: dto.external_job_id,
             eventId: dto.event_id,
             reason: INGEST_REASONS.PUBLISH_REJECTED,
-            message: 'Job title must be at least 3 characters',
+            message: 'Job title/name must be at least 3 characters',
           },
         },
       });
@@ -137,7 +138,7 @@ export class ExternalJobIngestService {
       const job = await tx.job.upsert({
         where: { externalJobId: dto.external_job_id },
         create: {
-          title: dto.job?.title ?? '(no title)',
+          title,
           description: dto.job?.description,
           location: dto.job?.location,
           employmentType: dto.job?.employment_type,
@@ -150,6 +151,7 @@ export class ExternalJobIngestService {
         },
         update: {
           status: JobStatus.PUBLISHED,
+          title,
           publishedAt: dto.published_at ? new Date(dto.published_at) : now,
           roundId: round.id,
         },
@@ -164,6 +166,7 @@ export class ExternalJobIngestService {
           externalJobId: dto.external_job_id,
           eventId: dto.event_id,
           externalPublishedAt: dto.published_at ?? null,
+          title,
         },
       );
 

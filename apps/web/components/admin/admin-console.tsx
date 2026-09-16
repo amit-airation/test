@@ -38,7 +38,17 @@ type ParticipantRow = {
   finalScore: number;
   finalRank: number | null;
   joinedAt: string | null;
+  lastScoredAt: string | null;
+  scoreReachedAt: string | null;
   company: { id: string; name: string; mobile: string };
+};
+
+type EventMetadata = {
+  jobId?: string;
+  finalScore?: number;
+  publishedAt?: string;
+  postDurationSeconds?: number | null;
+  title?: string;
 };
 
 type EventRow = {
@@ -46,6 +56,7 @@ type EventRow = {
   eventType: string;
   roundId: string | null;
   createdAt: string;
+  metadata: EventMetadata | null;
   participant: {
     id: string;
     companyId: string;
@@ -53,6 +64,30 @@ type EventRow = {
     mobile: string;
   } | null;
 };
+
+function formatClock(iso: string | null | undefined) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return '—';
+  }
+}
+
+function formatDurationLabel(seconds: number) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function asEventMetadata(value: unknown): EventMetadata | null {
+  if (!value || typeof value !== 'object') return null;
+  return value as EventMetadata;
+}
 
 type AdminConsoleProps = {
   competitionId: string;
@@ -113,7 +148,12 @@ export function AdminConsole({ competitionId }: AdminConsoleProps) {
       eventType: eventFilter || undefined,
       limit: 80,
     });
-    setEvents(res.events);
+    setEvents(
+      res.events.map((e) => ({
+        ...e,
+        metadata: asEventMetadata(e.metadata),
+      })),
+    );
   }, [competitionId, eventFilter]);
 
   useEffect(() => {
@@ -133,6 +173,27 @@ export function AdminConsole({ competitionId }: AdminConsoleProps) {
   useEffect(() => {
     void reloadEvents().catch(() => undefined);
   }, [reloadEvents]);
+
+  // Live race poll — last webhook timestamps without full page refresh
+  useEffect(() => {
+    if (!selectedRoundId || selectedRound?.status !== 'LIVE') return;
+    const id = window.setInterval(() => {
+      void reloadParticipants(selectedRoundId).catch(() => undefined);
+      void reloadEvents().catch(() => undefined);
+      void reload().catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [
+    selectedRoundId,
+    selectedRound?.status,
+    reloadParticipants,
+    reloadEvents,
+    reload,
+  ]);
+
+  const durationLabel = selectedRound
+    ? formatDurationLabel(selectedRound.durationSeconds)
+    : '5:00';
 
   const run = async (fn: () => Promise<unknown>, success?: string) => {
     setBusy(true);
@@ -264,6 +325,16 @@ export function AdminConsole({ competitionId }: AdminConsoleProps) {
             {message}
           </p>
         ) : null}
+
+        {/* Race rule */}
+        <section className="rounded-2xl border border-primary-accent/30 bg-primary-accent/5 p-6">
+          <h2 className="text-lg font-semibold">Winning rule</h2>
+          <p className="mt-1 text-sm text-muted-text">
+            Most scored jobs in {durationLabel} wins. If tied on count, earlier
+            time of reaching that score (from webhook events) ranks higher.
+            Participants may post as many jobs as they can.
+          </p>
+        </section>
 
         {/* Join PIN */}
         <section className="rounded-2xl border border-border bg-surface p-6">
@@ -511,19 +582,25 @@ export function AdminConsole({ competitionId }: AdminConsoleProps) {
           </form>
 
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[36rem] text-left text-sm">
+            <table className="w-full min-w-[48rem] text-left text-sm">
               <thead className="text-xs uppercase text-muted-text">
                 <tr>
+                  <th className="py-2 pr-2">Rank</th>
                   <th className="py-2 pr-2">Company</th>
                   <th className="py-2 pr-2">Mobile</th>
                   <th className="py-2 pr-2">Score</th>
+                  <th className="py-2 pr-2">Time reached</th>
+                  <th className="py-2 pr-2">Last webhook</th>
                   <th className="py-2 pr-2">Status</th>
                   <th className="py-2">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {participants.map((p) => (
+                {participants.map((p, index) => {
+                  const rank = p.finalRank ?? index + 1;
+                  return (
                   <tr key={p.id} className="border-t border-border">
+                    <td className="py-2 pr-2 font-mono tabular-nums">#{rank}</td>
                     <td className="py-2 pr-2">
                       <p className="font-medium">{p.company.name}</p>
                       <p className="font-mono text-xs text-muted-text">
@@ -531,9 +608,14 @@ export function AdminConsole({ competitionId }: AdminConsoleProps) {
                       </p>
                     </td>
                     <td className="py-2 pr-2 font-mono">{p.company.mobile}</td>
-                    <td className="py-2 pr-2">
+                    <td className="py-2 pr-2 font-mono tabular-nums">
                       {p.finalScore}
-                      {p.finalRank != null ? ` (#${p.finalRank})` : ''}
+                    </td>
+                    <td className="py-2 pr-2 font-mono text-xs tabular-nums">
+                      {formatClock(p.scoreReachedAt)}
+                    </td>
+                    <td className="py-2 pr-2 font-mono text-xs tabular-nums">
+                      {formatClock(p.lastScoredAt)}
                     </td>
                     <td className="py-2 pr-2">{p.status}</td>
                     <td className="py-2">
@@ -566,7 +648,8 @@ export function AdminConsole({ competitionId }: AdminConsoleProps) {
                       )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             {participants.length === 0 ? (
@@ -603,7 +686,21 @@ export function AdminConsole({ competitionId }: AdminConsoleProps) {
             </select>
           </div>
           <ul className="mt-3 max-h-80 space-y-2 overflow-y-auto text-sm">
-            {events.map((ev) => (
+            {events.map((ev) => {
+              const meta = ev.metadata;
+              const scorePart =
+                meta?.finalScore != null
+                  ? ` · score ${meta.finalScore}`
+                  : '';
+              const gapPart =
+                meta?.postDurationSeconds != null
+                  ? ` · +${Number(meta.postDurationSeconds).toFixed(1)}s gap`
+                  : '';
+              const jobPart = meta?.jobId
+                ? ` · job ${String(meta.jobId).slice(0, 8)}…`
+                : '';
+              const titlePart = meta?.title ? ` · ${meta.title}` : '';
+              return (
               <li
                 key={ev.id}
                 className="rounded-lg border border-border px-3 py-2"
@@ -614,9 +711,14 @@ export function AdminConsole({ competitionId }: AdminConsoleProps) {
                   {ev.participant
                     ? ` · ${ev.participant.companyName} (${ev.participant.mobile})`
                     : ''}
+                  {scorePart}
+                  {gapPart}
+                  {titlePart}
+                  {jobPart}
                 </p>
               </li>
-            ))}
+              );
+            })}
             {events.length === 0 ? (
               <li className="text-muted-text">No events.</li>
             ) : null}

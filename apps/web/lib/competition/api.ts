@@ -396,6 +396,8 @@ export function adminListParticipants(
       finalScore: number;
       finalRank: number | null;
       joinedAt: string | null;
+      lastScoredAt: string | null;
+      scoreReachedAt: string | null;
       company: { id: string; name: string; mobile: string };
     }>
   >(`/competitions/${competitionId}/rounds/${roundId}/participants`);

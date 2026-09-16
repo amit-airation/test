@@ -5,9 +5,44 @@ It describes how to drive the competition API: create the
 single competition, manage rounds and participants, and
 score publishes via the HMAC webhook.
 
-Canonical product rules: [`details.md`](../details.md) §15 / §15.1.  
+Canonical product rules: [`details.md`](../details.md) §15 / §15.1
+(winning rule: **most scored jobs**; ties broken by earlier
+`scoreReachedAt` from webhook receive time).  
 Deploy / env setup: [`DEPLOYMENT.md`](./DEPLOYMENT.md).  
 Local PowerShell walkthrough: [`LOCAL_TESTING.md`](./LOCAL_TESTING.md).
+
+---
+
+## Scoring webhook (one URL)
+
+There is **one** scoring endpoint. When a participant successfully
+publishes a job on the Hirance job server, call:
+
+```http
+POST /api/integrations/job-events
+Content-Type: application/json
+x-hirance-timestamp: <unix-seconds>
+x-hirance-signature: <hmac-hex>
+```
+
+Send at least:
+
+| Field | Meaning |
+|-------|---------|
+| `company_id` | Company UUID (must match registered roster) |
+| `external_job_id` | Job id (idempotency) |
+| `job.title` or `job.name` | Job name (min 3 chars) |
+
+Plus HMAC envelope fields (`event_id`, `event: "JOB_PUBLISHED"`).
+
+This API:
+
+1. Matches the company to the single **LIVE** round participant
+2. Increments score if receive time is in the scoring window
+3. Stamps `lastScoredAt` and `scoreReachedAt` (receive time)
+   for ranking / tie-break
+
+Unpublish uses the **same URL** with `event: "JOB_UNPUBLISHED"`.
 
 ---
 
@@ -209,8 +244,9 @@ x-admin-key: <ADMIN_KEY>
 ```
 
 After `endAt + 3s` (or after `end`), new publishes are not
-scored. Finalize freezes ranks and winner. Unpublish after
-finalize is blocked (`round_finalized`).
+scored. Finalize freezes ranks and winner using score DESC
+then `scoreReachedAt` ASC. Unpublish after finalize is
+blocked (`round_finalized`).
 
 ---
 
@@ -300,7 +336,7 @@ await notifyPublished({
 | `company_name` | no | Display refresh only — never used to match |
 | `external_job_id` | yes | Idempotency key |
 | `published_at` | no | Audit only; eligibility uses **receive time** |
-| `job.title` | for publish | Min 3 characters |
+| `job.title` or `job.name` | for publish | Min 3 characters (either field) |
 
 ### 5.3 `JOB_UNPUBLISHED`
 
@@ -318,9 +354,11 @@ On `JOB_PUBLISHED`:
 3. Upsert mirrored `Job` (`source = EXTERNAL`, unique
    `externalJobId`).
 4. Insert `RoundJobScore` (unique on `jobId`); `finalScore += 1`;
-   store `postDurationSeconds` since previous score.
+   store `postDurationSeconds` since previous score;
+   set `scoreReachedAt` / `lastScoredAt` to receive time.
 5. After commit, emit Socket.IO score / leaderboard events
    (TV / admin; not shown on participant screen-share UI).
+   Leaderboard order: score DESC, then `scoreReachedAt` ASC.
 
 Retries with the same `external_job_id` score at most once
 (`already_scored`).
