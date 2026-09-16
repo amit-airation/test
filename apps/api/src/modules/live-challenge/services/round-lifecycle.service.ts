@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   CompetitionEventType,
   ParticipantStatus,
@@ -66,6 +71,20 @@ export class RoundLifecycleService {
     const round = await this.requireRound(roundId);
     this.assertTransition(round.status, RoundStatus.LIVE);
 
+    const otherLive = await this.prisma.round.findFirst({
+      where: {
+        competitionId: round.competitionId,
+        status: RoundStatus.LIVE,
+        id: { not: roundId },
+      },
+      select: { id: true, roundNumber: true },
+    });
+    if (otherLive) {
+      throw new ConflictException(
+        `Round ${otherLive.roundNumber} is already LIVE. End or finalize it before starting another round.`,
+      );
+    }
+
     const { actualStartAt, endAt } = this.timer.computeWindow(
       round.durationSeconds,
     );
@@ -74,6 +93,11 @@ export class RoundLifecycleService {
       const result = await tx.round.update({
         where: { id: roundId },
         data: { status: RoundStatus.LIVE, actualStartAt, endAt },
+      });
+
+      await tx.competition.update({
+        where: { id: round.competitionId },
+        data: { activeRoundId: roundId },
       });
 
       await tx.roundParticipant.updateMany({
@@ -109,6 +133,18 @@ export class RoundLifecycleService {
       round_number: round.roundNumber,
       status: updated.status,
       timer,
+    });
+    this.realtime.emitActiveRoundChanged({
+      event: WS_EVENTS.ACTIVE_ROUND_CHANGED,
+      competition_id: round.competitionId,
+      active_round_id: roundId,
+      round: {
+        id: updated.id,
+        name: updated.name,
+        round_number: updated.roundNumber,
+        status: updated.status,
+        timer,
+      },
     });
 
     this.logger.log({

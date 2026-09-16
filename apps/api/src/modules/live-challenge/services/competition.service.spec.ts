@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CompetitionStatus } from '../../../generated/prisma/client.js';
 import { WS_EVENTS } from '../ws-events.js';
 import { CompetitionService } from './competition.service.js';
@@ -21,6 +25,7 @@ describe('CompetitionService', () => {
             status: CompetitionStatus.DRAFT,
           }),
         ),
+        findFirst: vi.fn(() => Promise.resolve(null)),
         findUnique: vi.fn((args: any) => {
           if (args.where.id === COMPETITION_ID) {
             return Promise.resolve({
@@ -85,6 +90,31 @@ describe('CompetitionService', () => {
     const created = await service.create({ name: 'Test Competition' });
     expect(created.id).toBe(COMPETITION_ID);
     expect(prisma.competition.create).toHaveBeenCalled();
+  });
+
+  it('rejects a second competition', async () => {
+    prisma.competition.findFirst.mockResolvedValueOnce({ id: COMPETITION_ID });
+    await expect(service.create({ name: 'Another' })).rejects.toThrow(
+      ConflictException,
+    );
+    expect(prisma.competition.create).not.toHaveBeenCalled();
+  });
+
+  it('finds the current singleton competition', async () => {
+    prisma.competition.findFirst.mockResolvedValueOnce({
+      id: COMPETITION_ID,
+      name: 'Test Competition',
+      status: CompetitionStatus.DRAFT,
+      activeRoundId: ROUND_ID,
+      rounds: [],
+    });
+    const current = await service.findCurrent();
+    expect(current.id).toBe(COMPETITION_ID);
+  });
+
+  it('throws NotFoundException when no current competition exists', async () => {
+    prisma.competition.findFirst.mockResolvedValueOnce(null);
+    await expect(service.findCurrent()).rejects.toThrow(NotFoundException);
   });
 
   it('finds a competition by id', async () => {

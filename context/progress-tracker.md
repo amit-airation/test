@@ -5,11 +5,17 @@ change.
 
 ## Current Phase
 
+- LiveKit Cloud for screen share (staging + production);
+  singleton competition + screen-share-only participants
+  delivered.
+- Job-server integration guide published
+  (`docs/JOB_SERVER_INTEGRATION.md`).
 - Admin console + closed-roster mobile join delivered.
 - Company identity: `companyId` + `companyName` + unique
   `mobile`; participants join with mobile + shared PIN.
 - Webhook scoring still by `company_id` only.
-- Phases 0–8 from `details.md` §60 remain delivered.
+- Phases 0–8 from `details.md` §60 remain delivered
+  (participant UI narrowed to screen share).
 
 ## Current Goal
 
@@ -18,6 +24,15 @@ change.
 
 ## Completed
 
+- Singleton competition: create returns 409 if one
+  already exists; `GET /api/competitions/current`.
+- Round `start` sets `activeRoundId` and rejects a second
+  concurrent LIVE round.
+- Participant UI: join + screen share only (no score /
+  rank / timer / leaderboard on participant page).
+- Home auto-routes to the current competition; admin
+  redirects to the singleton console when it exists.
+- Job-server guide: lifecycle REST + HMAC webhook.
 - Admin Next.js UI (`/admin`, `/admin/[id]`):
   sessionStorage `ADMIN_KEY` gate, create competition,
   rounds lifecycle, mobile roster, join PIN, audit events,
@@ -52,7 +67,10 @@ change.
 
 ## Architecture Decisions
 
-- Participant UI is Client Components for sockets/timer.
+- One competition for the product; many rounds with
+  per-round participants.
+- Participant UI is Client Components for sockets /
+  LiveKit only (no score chrome).
 - Closed roster: no self-join with company id/name.
 - Join PIN is the only secret configured in the admin UI;
   `ADMIN_KEY`, `EVENT_ACCESS_KEY`, webhook secret stay in `.env`.
@@ -60,16 +78,19 @@ change.
   (not score authority); PIN is never stored.
 - Webhook attribution remains `company_id`.
 - Observer/TV uses event key only (no mobile login).
+- Job server may use `ADMIN_KEY` for lifecycle and HMAC
+  for scoring (`docs/JOB_SERVER_INTEGRATION.md`).
 
 ## Session Notes
 
-- Screen share on staging: set `LIVEKIT_NODE_IP` to the
-  EC2 Elastic IP, open SG TCP 7881 + UDP 7882, then
-  `docker compose up -d --force-recreate livekit`.
-  Negotiation timeout = ICE cannot reach media ports /
-  wrong advertised IP (not WSS signaling).
+- Screen share (staging + prod): LiveKit Cloud via
+  `LIVEKIT_*` in repo-root `.env`. Recreate API after
+  changes: `docker compose up -d --force-recreate api`.
+  No EC2 ports 7881/7882; no `live.*` nginx vhost.
 - Admin: `/admin` — paste `ADMIN_KEY`.
-- Participant: `/competition/<id>` — mobile + PIN.
+- Participant: `/` → `/competition/<id>` — mobile + PIN →
+  screen share.
 - TV: `/competition/<id>/live`.
+- Job-server guide: [`docs/JOB_SERVER_INTEGRATION.md`](../docs/JOB_SERVER_INTEGRATION.md).
 - Local webhook walkthrough: [`docs/LOCAL_TESTING.md`](../docs/LOCAL_TESTING.md).
 - Production: [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md).

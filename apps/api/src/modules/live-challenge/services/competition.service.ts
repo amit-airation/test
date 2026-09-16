@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -33,6 +34,16 @@ export class CompetitionService {
 
   async create(dto: { name: string; description?: string }) {
     const competition = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.competition.findFirst({
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      });
+      if (existing) {
+        throw new ConflictException(
+          'Only one competition is allowed. Use the existing competition and create rounds on it.',
+        );
+      }
+
       const created = await tx.competition.create({
         data: {
           name: dto.name,
@@ -76,6 +87,34 @@ export class CompetitionService {
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
     }));
+  }
+
+  /** Singleton competition for participant home / join routing. */
+  async findCurrent() {
+    const competition = await this.prisma.competition.findFirst({
+      orderBy: { createdAt: 'asc' },
+      include: {
+        rounds: {
+          orderBy: { roundNumber: 'asc' },
+          select: {
+            id: true,
+            roundNumber: true,
+            name: true,
+            status: true,
+            durationSeconds: true,
+            actualStartAt: true,
+            endAt: true,
+            finalizedAt: true,
+            winnerCompanyId: true,
+            _count: { select: { participants: true } },
+          },
+        },
+      },
+    });
+    if (!competition) {
+      throw new NotFoundException('No competition has been created yet');
+    }
+    return this.toPublicCompetition(competition);
   }
 
   async findOne(competitionId: string) {

@@ -39,6 +39,13 @@ export class CompetitionController {
     return this.competitionService.findAll();
   }
 
+  /** Singleton competition — must be registered before GET :id. */
+  @Get('current')
+  @UseGuards(EventKeyGuard)
+  findCurrent() {
+    return this.competitionService.findCurrent();
+  }
+
   @Get(':id/events')
   @UseGuards(AdminKeyGuard)
   listEvents(

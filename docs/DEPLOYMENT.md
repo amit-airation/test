@@ -4,6 +4,7 @@ Complete guide to deploy and operate the competition
 **scoring / leaderboard / realtime** server in staging or
 production.
 
+Job-server API + webhook guide: [`JOB_SERVER_INTEGRATION.md`](./JOB_SERVER_INTEGRATION.md).  
 Local webhook walkthrough: [`LOCAL_TESTING.md`](./LOCAL_TESTING.md).  
 Product rules: [`details.md`](../details.md) §15 / §15.1.
 
@@ -19,7 +20,7 @@ This monorepo is **not** the Hirance job catalog. It only:
 | Scores, leaderboard, presence | Authoritative job database |
 | Socket.IO live updates | User login / JWT accounts |
 | HMAC webhook ingest (`company_id`) | Hirance employer accounts |
-| LiveKit token minting (optional) | Media SFU hosting (Compose/LiveKit does) |
+| LiveKit token minting | Media SFU (LiveKit Cloud; not hosted on this EC2) |
 
 ```text
 ┌──────────────────────────┐  HMAC JOB_PUBLISHED   ┌─────────────────────────────┐
@@ -31,8 +32,8 @@ This monorepo is **not** the Hirance job catalog. It only:
                  │ Participant + TV UI   │◄── x-event-key + WS ───┤
                  │ (Next.js)             │                        ▼
                  └───────────────────────┘              PostgreSQL + Redis
-                                                        (+ LiveKit optional)
-                                                        Nginx TLS edge
+                                                        LiveKit Cloud (screen)
+                                                        Nginx TLS edge (UI+API)
 ```
 
 **Identity:** company UUID + company name from the main
@@ -49,11 +50,12 @@ job server. No `User`, no JWT, no `externalUserId`.
 |------|-----|
 | Competition UI | `https://test.amitverma01.dev` |
 | API + Socket.IO | `https://api.test.amitverma01.dev` |
-| LiveKit signaling | `wss://live.test.amitverma01.dev` |
+| LiveKit (screen share) | LiveKit Cloud `LIVEKIT_PUBLIC_URL` (e.g. `wss://….livekit.cloud`) |
 | Job-server webhook target | `POST https://api.test.amitverma01.dev/api/integrations/job-events` |
 
-Override with `UI_SERVER_NAME` / `API_SERVER_NAME` /
-`LIVEKIT_SERVER_NAME` and matching DNS.
+Override UI/API with `UI_SERVER_NAME` / `API_SERVER_NAME`
+and matching DNS. Screen share does **not** use a
+`live.*` hostname on this host.
 
 ---
 
@@ -61,11 +63,13 @@ Override with `UI_SERVER_NAME` / `API_SERVER_NAME` /
 
 - Ubuntu EC2 (or similar) with Elastic IP, **or** any host
   that can run Docker Compose
-- DNS A/AAAA for UI, API, and LiveKit hostnames → EIP
+- DNS A/AAAA for UI and API hostnames → EIP
 - Docker Engine + Compose plugin (`npm run ec2:bootstrap`)
 - Outbound HTTPS from the **job server** to the competition API
+- Outbound HTTPS/WSS from browsers and the API to **LiveKit Cloud**
 - Shared secrets: `ADMIN_KEY`, `EVENT_ACCESS_KEY`,
   `EXTERNAL_JOB_WEBHOOK_SECRET` (each ≥ 32 chars in production)
+- LiveKit Cloud API key + secret in `.env`
 
 Security group / firewall inbound:
 
@@ -73,9 +77,9 @@ Security group / firewall inbound:
 |------|-------|---------|
 | 22 | TCP | SSH (restrict to your IP) |
 | 80 | TCP | ACME + HTTP→HTTPS |
-| 443 | TCP | HTTPS (UI, API, LiveKit WSS) |
-| 7881 | TCP | LiveKit WebRTC (TCP fallback) |
-| 7882 | UDP | LiveKit WebRTC media |
+| 443 | TCP | HTTPS (UI + API only) |
+
+No EC2 ports 7881/7882 when using LiveKit Cloud.
 
 ---
 
@@ -147,32 +151,31 @@ NEXT_PUBLIC_EVENT_KEY=<same as EVENT_ACCESS_KEY>
 time. Changing them requires `docker compose up -d --build web`
 (or a full rebuild).
 
-### 5.3 Optional — LiveKit screen share
+### 5.3 LiveKit Cloud screen share (staging + production)
+
+Use the **same LiveKit Cloud project** for staging and
+production. Nest mints room tokens; browsers connect to
+Cloud directly — nginx does not proxy media.
 
 ```env
-LIVEKIT_PUBLIC_URL=wss://live.test.amitverma01.dev
-LIVEKIT_API_KEY=<strong-key>
-LIVEKIT_API_SECRET=<strong-secret-≥32-chars>
-# EC2 Elastic IP — required for WebRTC ICE behind Docker
-LIVEKIT_NODE_IP=<elastic-ip>
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_PUBLIC_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=<cloud-api-key>
+LIVEKIT_API_SECRET=<cloud-api-secret>
 ```
 
-Compose sets `LIVEKIT_URL=http://livekit:7880` for the API.
-Keys must match [`docker/livekit/livekit.staging.yaml`](../docker/livekit/livekit.staging.yaml).
-Browsers use WSS for signaling via nginx; **media** uses host
-ports **TCP 7881** and **UDP 7882** directly (open in the
-security group). If screen share shows
-`NegotiationError: negotiation timed out`, set
-`LIVEKIT_NODE_IP` to the Elastic IP and recreate LiveKit:
+Compose passes these into the API container from repo-root
+`.env`. Recreate the API after changing them:
 
 ```bash
-# in repo-root .env
-LIVEKIT_NODE_IP=$(curl -s https://checkip.amazonaws.com)
-docker compose up -d --force-recreate livekit
+docker compose up -d --force-recreate api
 ```
 
-Leave LiveKit unset only if you also remove/disable the service;
-weak `devkey`/`secret` values **fail production boot** when
+The self-hosted Compose `livekit` service is **off by
+default** (profile `self-hosted-livekit`). Do not open
+7881/7882 or set `LIVEKIT_NODE_IP` when using Cloud.
+
+Weak `devkey`/`secret` values **fail production boot** when
 `LIVEKIT_URL` is set.
 
 ### 5.4 Production boot rules
@@ -194,7 +197,10 @@ See [`apps/api/src/config/security.config.ts`](../apps/api/src/config/security.c
 Everything runs from the repo root via
 [`docker-compose.yml`](../docker-compose.yml):
 
-`postgres` · `redis` · `livekit` · `api` · `web` · `nginx` · `certs`
+`postgres` · `redis` · `api` · `web` · `nginx` · `certs`
+
+(Screen share: LiveKit Cloud via `.env`. Optional self-hosted
+SFU: `docker compose --profile self-hosted-livekit up -d`.)
 
 ### 6.1 Bootstrap host (once)
 
@@ -215,8 +221,9 @@ cp .env.example .env
 
 ### 6.3 Point DNS
 
-Create records for UI, API, and LiveKit hostnames → Elastic IP.
+Create records for UI and API hostnames → Elastic IP.
 Port **80** must be reachable for Let's Encrypt.
+No `live.*` DNS record is required for LiveKit Cloud.
 
 ### 6.4 Start stack + TLS
 
@@ -274,7 +281,7 @@ Never use `prisma migrate dev` in production.
 
 | Script | Purpose |
 |--------|---------|
-| `npm run ec2:bootstrap` | Install Docker + open ufw 80/443/7881 + UDP 7882 |
+| `npm run ec2:bootstrap` | Install Docker + open ufw 22/80/443 |
 | `npm run up` | `docker compose up -d --build` |
 | `npm run down` | Stop the stack |
 | `npm run ssl:cert` | First-time Let's Encrypt (standalone) |
@@ -288,7 +295,6 @@ Nginx envsubst defaults:
 |----------|---------|
 | `UI_SERVER_NAME` | `test.amitverma01.dev` |
 | `API_SERVER_NAME` | `api.test.amitverma01.dev` |
-| `LIVEKIT_SERVER_NAME` | `live.test.amitverma01.dev` |
 
 ---
 
@@ -371,172 +377,35 @@ Participants enter **mobile + join password** only
 
 ## 8. Job-server integration
 
-### 8.1 Responsibilities
+**Canonical guide for the job-server team:**
+[`JOB_SERVER_INTEGRATION.md`](./JOB_SERVER_INTEGRATION.md).
+
+That document covers:
+
+- Admin REST: create the singleton competition, rounds,
+  register participants, start / end / finalize
+- HMAC webhook: `POST /api/integrations/job-events`
+- Signature recipe, payloads, response reasons, checklist
+
+Summary:
 
 | Actor | Responsibility |
 |-------|----------------|
-| Job server | Publish/unpublish jobs; POST signed webhook on success |
-| Competition API | Match `company_id` → LIVE round participant; score; broadcast |
-| Competition UI | Score, rank, leaderboard, timer, screen share |
+| Job server | Lifecycle via `x-admin-key`; score via HMAC on publish |
+| Competition API | Match `company_id` → LIVE round; score; broadcast |
+| Participant UI | Screen share only after mobile + PIN join |
+| TV / admin UI | Leaderboard, timer, remote screens |
 
-The job server must **never**:
-
-- Send competition internal IDs other than its own company UUID
-- Trust client scores or timers
-- Use `ADMIN_KEY` / `EVENT_ACCESS_KEY` instead of HMAC
-
-### 8.2 Identity
-
-1. Main server’s **company UUID** is `Company.id` on this API.
-2. Join/register stores `companyId` + `companyName`.
-3. Webhook body uses `company_id` (same UUID) for matching.
-4. Optional `company_name` refreshes display only — never used
-   to match.
-
-### 8.3 Endpoint
+Webhook target:
 
 ```http
 POST https://api.test.amitverma01.dev/api/integrations/job-events
 Content-Type: application/json
 x-hirance-timestamp: <unix-seconds>
-x-hirance-signature: <hex>   # or sha256=<hex>
+x-hirance-signature: <hex>
 ```
 
 Requires `EXTERNAL_JOB_WEBHOOK_ENABLED=true`.
-
-### 8.4 Signature
-
-```text
-payload   = `${x-hirance-timestamp}.${rawBodyUtf8}`
-signature = HMAC_SHA256_HEX(EXTERNAL_JOB_WEBHOOK_SECRET, payload)
-```
-
-Sign the **exact** raw body you POST. Timestamp must fall
-within `EXTERNAL_JOB_WEBHOOK_SKEW_SECONDS` (default 300).
-
-#### Node example
-
-```js
-import { createHmac } from 'node:crypto';
-
-function sign(secret, timestampSeconds, rawBody) {
-  return createHmac('sha256', secret)
-    .update(`${timestampSeconds}.${rawBody}`)
-    .digest('hex');
-}
-
-async function notifyPublished({ secret, baseUrl, event }) {
-  const rawBody = JSON.stringify(event);
-  const ts = String(Math.floor(Date.now() / 1000));
-  const res = await fetch(`${baseUrl}/api/integrations/job-events`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-hirance-timestamp': ts,
-      'x-hirance-signature': sign(secret, ts, rawBody),
-    },
-    body: rawBody,
-  });
-  return res.json();
-}
-```
-
-### 8.5 Payloads
-
-#### `JOB_PUBLISHED`
-
-```json
-{
-  "event_id": "11111111-1111-1111-1111-111111111111",
-  "event": "JOB_PUBLISHED",
-  "company_id": "hirance-company-uuid",
-  "company_name": "Acme Recruiting",
-  "external_job_id": "hirance-job-987",
-  "published_at": "2026-09-14T10:21:32.412Z",
-  "job": {
-    "title": "Backend Engineer",
-    "description": "…",
-    "location": "Remote",
-    "employment_type": "FULL_TIME"
-  }
-}
-```
-
-| Field | Required | Notes |
-|-------|----------|--------|
-| `event_id` | yes | UUID; audit metadata |
-| `event` | yes | `JOB_PUBLISHED` or `JOB_UNPUBLISHED` |
-| `company_id` | yes | Main-server company UUID (**match key**) |
-| `company_name` | no | Display refresh only |
-| `external_job_id` | yes | Idempotency key |
-| `published_at` | no | Audit only; eligibility uses receive time |
-| `job.title` | for publish | Min 3 characters |
-
-#### `JOB_UNPUBLISHED`
-
-Same envelope with `"event": "JOB_UNPUBLISHED"`. Reverses the
-ledger (floor 0). Blocked if the round is `FINALIZED`.
-
-### 8.6 Resolution rules
-
-On `JOB_PUBLISHED`:
-
-1. Find `RoundParticipant` with `company_id` in a **LIVE** round.
-   - 0 → `no_live_round` (not scored)
-   - &gt;1 → `multiple_live_rounds` (not scored)
-2. Receive time must be in `[actualStartAt, endAt + 3s]`.
-3. Upsert mirrored `Job` (`source = EXTERNAL`).
-4. Insert `RoundJobScore` (unique on `jobId`); `finalScore += 1`;
-   store `postDurationSeconds` since previous score.
-5. After commit, emit Socket.IO score / leaderboard events.
-
-Retries with the same `external_job_id` score at most once
-(`already_scored`).
-
-### 8.7 Response
-
-```json
-{
-  "scored": true,
-  "my_score": 12,
-  "round_id": "uuid",
-  "job_id": "uuid",
-  "post_duration_seconds": 14.2,
-  "reason": null
-}
-```
-
-| reason | Meaning |
-|--------|---------|
-| `no_live_round` | Company not in a LIVE round |
-| `multiple_live_rounds` | Ambiguous LIVE membership |
-| `outside_scoring_window` | After `endAt + 3s` (or before start) |
-| `already_scored` | Idempotent retry |
-| `publish_rejected` | Validation (e.g. short title) |
-| `round_finalized` | Unpublish blocked |
-| `job_owner_mismatch` | Unpublish company ≠ job owner |
-
-Treat `2xx` + `scored: false` as a handled business outcome.
-Retry `5xx` / network errors with the **same** `external_job_id`.
-
-### 8.8 When to call
-
-| Job-server event | Webhook |
-|------------------|---------|
-| Job successfully published | `JOB_PUBLISHED` |
-| Job unpublished / deleted | `JOB_UNPUBLISHED` |
-| Draft saved / validation failed | **Do not call** |
-
-### 8.9 Job-server checklist
-
-- [ ] Secret only in job-server secrets manager
-- [ ] HTTPS webhook URL only
-- [ ] Sign raw body; do not re-serialize after signing
-- [ ] NTP-synced clocks
-- [ ] Stable `external_job_id` for retries
-- [ ] Send `company_id` (UUID), optional `company_name`
-- [ ] Never put JWT / admin / event keys on the webhook
-- [ ] Confirm network path job-server → competition API
 
 ---
 
@@ -603,6 +472,7 @@ EXTERNAL_JOB_WEBHOOK_SECRET=... ADMIN_KEY=... EVENT_ACCESS_KEY=... \
 
 | Doc | Contents |
 |-----|----------|
+| [`JOB_SERVER_INTEGRATION.md`](./JOB_SERVER_INTEGRATION.md) | Job-server lifecycle REST + HMAC webhook |
 | [`LOCAL_TESTING.md`](./LOCAL_TESTING.md) | Local PowerShell webhook + UI |
 | [`../docker/nginx/`](../docker/nginx/) | Nginx image + proxy templates |
 | [`../docker-compose.yml`](../docker-compose.yml) | Full stack |

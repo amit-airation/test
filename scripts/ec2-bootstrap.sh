@@ -68,12 +68,10 @@ if command -v ufw >/dev/null 2>&1; then
   ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || true
   ufw allow 80/tcp >/dev/null 2>&1 || true
   ufw allow 443/tcp >/dev/null 2>&1 || true
-  ufw allow 7881/tcp >/dev/null 2>&1 || true
-  ufw allow 7882/udp >/dev/null 2>&1 || true
   if ufw status 2>/dev/null | grep -qi 'Status: active'; then
-    echo "    ufw is active; 22/80/443/7881 + UDP 7882 allowed"
+    echo "    ufw is active; 22/80/443 allowed"
   else
-    echo "    ufw is inactive — rely on the EC2 security group for 22/80/443/7881 + UDP 7882"
+    echo "    ufw is inactive — rely on the EC2 security group for 22/80/443"
   fi
 fi
 
@@ -85,28 +83,28 @@ cat <<EOF
 EC2 security group (console) must allow inbound:
   - TCP 22  from your IP
   - TCP 80  from 0.0.0.0/0 (Let's Encrypt + redirect)
-  - TCP 443 from 0.0.0.0/0 (UI + API + LiveKit signaling)
-  - TCP 7881 from 0.0.0.0/0 (LiveKit WebRTC TCP fallback)
-  - UDP 7882 from 0.0.0.0/0 (LiveKit WebRTC media)
+  - TCP 443 from 0.0.0.0/0 (UI + API)
+
+Screen share uses LiveKit Cloud (outbound from browsers + API).
+No host ports 7881/7882 and no live.* DNS when using Cloud.
 
 DNS:
   test.amitverma01.dev      → this instance Elastic IP
   api.test.amitverma01.dev  → same Elastic IP
-  live.test.amitverma01.dev → same Elastic IP
 
 Then (as the deploy user, after re-login for docker group):
   cd ${ROOT_DIR}
-  # ensure apps/api/.env + apps/web/.env.local are production-ready
+  # ensure repo-root .env has production keys + LIVEKIT_* Cloud credentials
   npm run ssl:cert
   npm run edge:up
 
 API should listen on :3001 and web on :3000 on the host
-(nginx reaches them via host.docker.internal).
-LiveKit SFU starts with the edge (keys in docker/livekit/livekit.staging.yaml).
+(nginx reaches them via Docker network).
 
 Job server api.hirance.com →
   https://api.test.amitverma01.dev/api/integrations/job-events
 
 Optional TLS renew cron (monthly):
   0 3 1 * * cd ${ROOT_DIR} && npm run ssl:renew >> /var/log/hirance-ssl-renew.log 2>&1
+
 EOF

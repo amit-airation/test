@@ -1083,30 +1083,24 @@ Example route:
 /competition/[id]
 ```
 
+Home (`/`) resolves the singleton competition via
+`GET /api/competitions/current` and redirects here.
+
+After mobile + PIN join, the participant UI is
+**screen share only**. Do not show score, rank, timer,
+leaderboard, or job creation on this page. Those live on
+the TV / admin surfaces and the external job server.
+
 Example:
 
 ```text
 ┌─────────────────────────────────────────────┐
-│ 🏆 HIRANCE JOB CHALLENGE                    │
+│ HIRANCE LIVE CHALLENGE                      │
+│ Acme Recruiting          Round 1 · LIVE     │
 │                                             │
-│              ⏱ 04:32                       │
+│            [ START SCREEN SHARE ]           │
 │                                             │
-│ YOUR SCORE                                  │
-│                                             │
-│                 12                          │
-│        JOBS SUCCESSFULLY PUBLISHED          │
-│                                             │
-│ Current Rank: #2                            │
-│                                             │
-│ ─────────────────────────────────────────── │
-│                                             │
-│            [ CREATE JOB ]                   │
-│                                             │
-│ Recent Publications                         │
-│                                             │
-│ ✓ Software Engineer      10:21:32           │
-│ ✓ Product Manager        10:20:51           │
-│ ✓ React Developer        10:20:08           │
+│ Waiting / DQ / not-in-round banners only    │
 └─────────────────────────────────────────────┘
 ```
 
@@ -1114,23 +1108,20 @@ Example:
 
 # 26. Job creation UI
 
-Reuse the existing Next.js / Hirance job creation UI/components wherever possible.
+Job create / publish lives on the **external Hirance job
+server**, not in this Next.js app. Do not build a
+competition-local job form on the participant page.
 
-Do not create a completely separate job creation form unless the existing UI cannot support the competition.
+Wire the job server to:
 
-The competition UI should clearly show:
+1. Admin REST (`x-admin-key`) for competition / rounds /
+   roster / start / end — see
+   `docs/JOB_SERVER_INTEGRATION.md`
+2. HMAC webhook `POST /api/integrations/job-events` on
+   successful publish
 
-```text
-Competition active
-Time remaining
-Jobs published
-Current rank
-Leaderboard
-```
-
-The user should not need to manually refresh.
-
-Wire the existing job form to the existing NestJS Job APIs with competition context. Keep live score/rank/timer in Client Components subscribed to the NestJS gateway.
+TV / admin Client Components subscribed to the NestJS
+gateway show live score / rank / timer.
 
 ---
 
@@ -1455,16 +1446,15 @@ Enforce with NestJS guards, policies, and service-level checks:
 
 Can:
 
-* view own competition
-* create competition jobs
-* publish competition jobs
-* view permitted leaderboard information
+* join the active round with mobile + shared PIN
+* screen-share while the round is LIVE (LiveKit)
 
 Cannot:
 
-* modify score
-* modify rank
+* view or modify score
+* view or modify rank
 * modify competition timing
+* create / publish jobs in this app (job server only)
 * access another participant's private information
 * access observer/admin operations
 
@@ -2236,12 +2226,11 @@ Implement in this order:
 
 ### Phase 4 — Participant UI (Next.js)
 
-* competition page
-* countdown
-* score
-* rank
-* leaderboard
-* job creation integration
+* competition page (singleton via `/competitions/current`)
+* mobile + PIN join
+* screen share controls (LiveKit)
+* waiting / not-in-round / DQ banners only
+* no score / rank / timer / leaderboard on participant page
 
 ### Phase 5 — Observer UI (Next.js)
 

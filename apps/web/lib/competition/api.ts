@@ -81,6 +81,27 @@ export async function probeAdminKey(adminKey: string): Promise<boolean> {
 
 // ─── Competition (event key) ─────────────────────────────────────────────────
 
+export function fetchCurrentCompetition() {
+  return apiFetch<{
+    id: string;
+    name: string;
+    status: string;
+    activeRoundId: string | null;
+    joinPinSet?: boolean;
+    rounds: Array<{
+      id: string;
+      roundNumber: number;
+      name: string | null;
+      status: string;
+      durationSeconds: number;
+      actualStartAt: string | null;
+      endAt: string | null;
+      winnerCompanyId?: string | null;
+      _count?: { participants: number };
+    }>;
+  }>('/competitions/current');
+}
+
 export function fetchCompetitionSnapshot(competitionId: string) {
   return apiFetch<{
     id: string;

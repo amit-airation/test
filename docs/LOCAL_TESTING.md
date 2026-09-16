@@ -4,6 +4,7 @@ This API does **not** create jobs. Jobs are published on an
 external job server; this service scores via signed webhooks
 and shows live leaderboards.
 
+Job-server API + webhook guide: [`JOB_SERVER_INTEGRATION.md`](./JOB_SERVER_INTEGRATION.md).  
 Production / EC2 setup: [`DEPLOYMENT.md`](./DEPLOYMENT.md).
 
 ---
@@ -315,4 +316,5 @@ npm run load:competition -w api
 | UI cannot call API | `NEXT_PUBLIC_EVENT_KEY` ≠ `EVENT_ACCESS_KEY` |
 | Socket unauthorized | Missing `auth.eventKey` / event key |
 
-Production deploy: [`DEPLOYMENT.md`](./DEPLOYMENT.md).
+Production deploy: [`DEPLOYMENT.md`](./DEPLOYMENT.md).  
+Job-server integration: [`JOB_SERVER_INTEGRATION.md`](./JOB_SERVER_INTEGRATION.md).

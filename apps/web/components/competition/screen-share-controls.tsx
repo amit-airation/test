@@ -138,7 +138,7 @@ export function ScreenShareControls({
       setState('error');
       if (/negotiation|timeout|ICE|WebSocket/i.test(text)) {
         setMessage(
-          'Screen share could not connect (WebRTC). Ask ops to open TCP 7881 + UDP 7882 to the LiveKit host, and set LIVEKIT_NODE_IP to the Elastic IP.',
+          'Screen share could not connect (WebRTC). Check LIVEKIT_URL / LIVEKIT_PUBLIC_URL / API key in .env, and that browsers can reach LiveKit Cloud.',
         );
         return;
       }

@@ -10,7 +10,7 @@
 | Database     | Prisma 7 + PostgreSQL                           | Authoritative competition, job, and score state   |
 | Cache / bus  | Redis                                           | Presence, leaderboard cache, Socket.IO adapter    |
 | Workers      | BullMQ or existing NestJS queue                 | Finalization, notifications, cleanup, reconcile   |
-| Media        | WebRTC + LiveKit SFU                            | Screen share only — never scoring                 |
+| Media        | WebRTC + LiveKit Cloud SFU                      | Screen share only — never scoring                 |
 | Edge         | Nginx (Docker)                                  | TLS for UI `test.amitverma01.dev` + API `api.test.amitverma01.dev` |
 
 Greenfield monorepo layout (Phase 0):
@@ -35,8 +35,12 @@ Do not introduce TypeORM. Prisma 7 uses `prisma.config.ts`, the
 - `Company` — sole participant identity (main-server UUID
   + display name)
 - Key guards — `ADMIN_KEY`, `EVENT_ACCESS_KEY`, webhook HMAC
+- Singleton competition — at most one `Competition` row;
+  `GET /api/competitions/current` (event key) returns it;
+  a second create returns 409
 - Next.js `app/competition/[id]/` — participant UI
-  (mobile + PIN join; score/rank/leaderboard; no job create)
+  (mobile + PIN join; **screen share only**; no score /
+  rank / leaderboard / job create)
 - Next.js `app/competition/[id]/live/` — observer / TV UI
 - Next.js `app/admin/` — operator console (`ADMIN_KEY` in
   sessionStorage; never baked into the web image)
@@ -44,9 +48,15 @@ Do not introduce TypeORM. Prisma 7 uses `prisma.config.ts`, the
 - Next.js `components/admin/` — admin console widgets
 - Next.js `lib/competition/` — API client, socket client,
   shared types, admin session
-- LiveKit SFU — screen media only. NestJS mints short-lived
-  room tokens; Next.js clients connect with `livekit-client`.
-  Video never traverses Nest sockets.
+- LiveKit SFU — **LiveKit Cloud** in staging and
+  production (`LIVEKIT_URL` / `LIVEKIT_PUBLIC_URL` /
+  key / secret in `.env`). NestJS mints short-lived room
+  tokens; Next.js clients connect with `livekit-client`
+  straight to Cloud. Video never traverses Nest sockets
+  or this host’s nginx.
+- External job server — may drive lifecycle with
+  `ADMIN_KEY` REST and must score via HMAC webhook; see
+  `docs/JOB_SERVER_INTEGRATION.md`
 
 Next.js is the UI layer only. NestJS owns scoring, timer
 authority, and authorization. Job CRUD lives on the
@@ -147,22 +157,27 @@ reconcilable against the ledger.
 - Identity is **Company** (`id` = main-server UUID,
   `name` for display, unique `mobile` for join).
   No `User` or `externalUserId`.
-- **Participant**: closed roster — admin registers
-  company + mobile; join with `mobile` + competition
-  join PIN (default `123456`). View score/rank/
-  leaderboard, optional screen share. Cannot change
-  score, rank, or timing. Publishes happen on the
-  external job server and are attributed by
-  `company_id` on the webhook.
-- **External job server**: HMAC-signed ingest only. Cannot
-  set score, rank, or timer. Must not use event/admin keys
-  as a substitute for HMAC.
+- **Participant**: closed roster — admin / job server
+  registers company + mobile; join with `mobile` +
+  competition join PIN (default `123456`). Screen share
+  only while the active round is LIVE. Cannot view or
+  change score, rank, or timing. Publishes happen on the
+  external job server and are attributed by `company_id`
+  on the webhook.
+- **External job server**: HMAC-signed ingest for scoring;
+  may also call admin REST (`x-admin-key`) to create the
+  singleton competition, rounds, register participants,
+  start/end/finalize. Cannot set score, rank, or timer
+  directly. Must not use event keys as a substitute for
+  HMAC on the webhook.
 - **Observer**: view competition, leaderboard, authorized
   screens with event key. Cannot publish or mutate state.
 - **Competition admin**: Next.js `/admin` (session
-  `ADMIN_KEY`) plus Nest admin APIs — create, schedule,
-  register (with mobile), start, cancel, end, finalize,
-  disqualify, set active round, set join PIN, audit events.
+  `ADMIN_KEY`) plus Nest admin APIs — create (once),
+  schedule, register (with mobile), start, cancel, end,
+  finalize, disqualify, set active round, set join PIN,
+  audit events. Round `start` also sets `activeRoundId`
+  and rejects a second concurrent LIVE round.
 - Next.js may hide unauthorized UI. Hiding UI is not
   authorization. NestJS guards remain the authority.
 - Permission-check every socket connection and room join.

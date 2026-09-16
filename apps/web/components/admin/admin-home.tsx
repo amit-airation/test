@@ -1,39 +1,43 @@
 'use client';
 
-import Link from 'next/link';
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   adminCreateCompetition,
   adminListCompetitions,
   fetchHealthReady,
   fetchMetrics,
-  type AdminCompetitionListItem,
 } from '@/lib/competition/api';
 import { clearAdminKey } from '@/lib/competition/admin-session';
-import { StatusBadge } from '@/components/competition/status-badge';
 
 type AdminHomeProps = {
   onSignOut: () => void;
 };
 
 export function AdminHome({ onSignOut }: AdminHomeProps) {
-  const [items, setItems] = useState<AdminCompetitionListItem[]>([]);
+  const router = useRouter();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [health, setHealth] = useState<string>('…');
   const [metricsHint, setMetricsHint] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
+  const load = useCallback(async () => {
     const list = await adminListCompetitions();
-    setItems(list);
-  }, []);
+    if (list.length > 0) {
+      router.replace(`/admin/${list[0].id}`);
+      return;
+    }
+    setLoading(false);
+  }, [router]);
 
   useEffect(() => {
-    void reload().catch((err) =>
-      setError(err instanceof Error ? err.message : 'Failed to load'),
-    );
+    void load().catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to load');
+      setLoading(false);
+    });
     void fetchHealthReady()
       .then((h) => setHealth(String(h.status ?? 'unknown')))
       .catch(() => setHealth('unreachable'));
@@ -45,7 +49,7 @@ export function AdminHome({ onSignOut }: AdminHomeProps) {
         );
       })
       .catch(() => setMetricsHint(null));
-  }, [reload]);
+  }, [load]);
 
   const create = async (e: FormEvent) => {
     e.preventDefault();
@@ -56,16 +60,13 @@ export function AdminHome({ onSignOut }: AdminHomeProps) {
     }
     setBusy(true);
     try {
-      await adminCreateCompetition({
+      const created = await adminCreateCompetition({
         name: name.trim(),
         description: description.trim() || undefined,
       });
-      setName('');
-      setDescription('');
-      await reload();
+      router.replace(`/admin/${created.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Create failed');
-    } finally {
       setBusy(false);
     }
   };
@@ -74,6 +75,14 @@ export function AdminHome({ onSignOut }: AdminHomeProps) {
     clearAdminKey();
     onSignOut();
   };
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <p className="text-sm text-muted-text">Opening competition console…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background px-4 py-8 sm:px-8">
@@ -84,10 +93,15 @@ export function AdminHome({ onSignOut }: AdminHomeProps) {
               Hirance Admin
             </p>
             <h1 className="mt-1 text-3xl font-semibold text-foreground">
-              Competitions
+              Create competition
             </h1>
             <p className="mt-1 text-sm text-muted-text">
-              API health: <span className="font-medium text-foreground">{health}</span>
+              Only one competition is allowed. Create it once, then manage
+              rounds and participants from the console.
+            </p>
+            <p className="mt-1 text-sm text-muted-text">
+              API health:{' '}
+              <span className="font-medium text-foreground">{health}</span>
               {metricsHint ? (
                 <>
                   {' '}
@@ -106,12 +120,9 @@ export function AdminHome({ onSignOut }: AdminHomeProps) {
         </header>
 
         <section className="rounded-2xl border border-border bg-surface p-6">
-          <h2 className="text-lg font-semibold text-foreground">
-            Create competition
-          </h2>
-          <p className="mt-1 text-sm text-muted-text">
+          <p className="text-sm text-muted-text">
             Join PIN defaults to <code className="font-mono text-xs">123456</code>.
-            Change it on the competition console.
+            Change it on the competition console after create.
           </p>
           <form onSubmit={create} className="mt-4 space-y-3" noValidate>
             <input
@@ -139,52 +150,6 @@ export function AdminHome({ onSignOut }: AdminHomeProps) {
               {busy ? 'Creating…' : 'Create'}
             </button>
           </form>
-        </section>
-
-        <section className="rounded-2xl border border-border bg-surface p-6">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-foreground">All competitions</h2>
-            <button
-              type="button"
-              onClick={() => void reload()}
-              className="text-sm text-primary-accent underline"
-            >
-              Refresh
-            </button>
-          </div>
-          {items.length === 0 ? (
-            <p className="text-sm text-muted-text">No competitions yet.</p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {items.map((c) => (
-                <li
-                  key={c.id}
-                  className="flex flex-wrap items-center justify-between gap-3 py-4"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold text-foreground">
-                      {c.name}
-                    </p>
-                    <p className="mt-0.5 font-mono text-xs text-muted-text">
-                      {c.id}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-text">
-                      {c.roundCount} round{c.roundCount === 1 ? '' : 's'}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <StatusBadge status={c.status} />
-                    <Link
-                      href={`/admin/${c.id}`}
-                      className="rounded-lg bg-primary-accent px-3 py-2 text-sm font-semibold text-white"
-                    >
-                      Open
-                    </Link>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
         </section>
       </div>
     </div>

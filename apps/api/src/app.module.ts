@@ -17,7 +17,8 @@ import { LiveChallengeModule } from './modules/live-challenge/live-challenge.mod
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env'],
+      // apps/api/.env for local; monorepo root .env for Compose / shared secrets
+      envFilePath: ['.env', '../../.env'],
     }),
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],

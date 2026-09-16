@@ -1,11 +1,14 @@
-# One command for the full stack (EC2 staging / local Docker).
+# One command for the full stack (EC2 staging / production).
 #
 #   npm run ssl:cert:webroot   # after DNS points here (or first-time standalone)
 #   docker compose up -d --build
 #
 #   UI      https://test.amitverma01.dev
 #   API     https://api.test.amitverma01.dev
-#   LiveKit wss://live.test.amitverma01.dev
+#   Screen  LiveKit Cloud (LIVEKIT_PUBLIC_URL in .env) — not proxied by nginx
+#
+# Optional self-hosted SFU (legacy):
+#   docker compose --profile self-hosted-livekit up -d livekit
 #
 # Job server api.hirance.com →
 #   POST https://api.test.amitverma01.dev/api/integrations/job-events
@@ -43,14 +46,15 @@ services:
       timeout: 5s
       retries: 10
 
+  # Legacy / optional — production uses LiveKit Cloud from .env
   livekit:
+    profiles: ["self-hosted-livekit"]
     image: livekit/livekit-server:v1.9.2
     container_name: hirance-livekit
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     environment:
       LIVEKIT_CONFIG: /etc/livekit.yaml
-      # Set to your EC2 Elastic IP in .env for reliable ICE (recommended).
       LIVEKIT_NODE_IP: ${LIVEKIT_NODE_IP:-}
     volumes:
       - ./docker/livekit/livekit.staging.yaml:/etc/livekit.yaml:ro
@@ -58,7 +62,6 @@ services:
     ports:
       - "7881:7881"
       - "7882:7882/udp"
-    # Ensure outbound STUN / IP detect works from the container.
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -94,15 +97,16 @@ services:
       DATABASE_URL: postgresql://hirance:hirance@postgres:5432/hirance?schema=public
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      LIVEKIT_URL: http://livekit:7880
-      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-wss://live.test.amitverma01.dev}
+      # Production: LiveKit Cloud from repo-root .env (required for screen share)
+      LIVEKIT_URL: ${LIVEKIT_URL}
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      livekit:
-        condition: service_started
     healthcheck:
       test:
         [
@@ -154,10 +158,8 @@ services:
     environment:
       API_UPSTREAM: api:3001
       WEB_UPSTREAM: web:3000
-      LIVEKIT_UPSTREAM: livekit:7880
       UI_SERVER_NAME: ${UI_SERVER_NAME:-test.amitverma01.dev}
       API_SERVER_NAME: ${API_SERVER_NAME:-api.test.amitverma01.dev}
-      LIVEKIT_SERVER_NAME: ${LIVEKIT_SERVER_NAME:-live.test.amitverma01.dev}
     volumes:
       - ./docker/nginx/certs:/etc/nginx/certs:ro
       - ./docker/nginx/certbot/www:/var/www/certbot:ro
@@ -168,8 +170,6 @@ services:
         condition: service_healthy
       web:
         condition: service_healthy
-      livekit:
-        condition: service_started
 
 volumes:
   hirance_postgres_data:

@@ -50,7 +50,6 @@ fi
 
 export UI_SERVER_NAME="${UI_SERVER_NAME:-test.amitverma01.dev}"
 export API_SERVER_NAME="${API_SERVER_NAME:-api.test.amitverma01.dev}"
-export LIVEKIT_SERVER_NAME="${LIVEKIT_SERVER_NAME:-live.test.amitverma01.dev}"
 
 "${COMPOSE[@]}" up -d --build
 
@@ -71,6 +70,6 @@ echo "Stack is up:"
 echo "  UI      https://${UI_SERVER_NAME}"
 echo "  API     https://${API_SERVER_NAME}/api/health/live"
 echo "  WS      https://${API_SERVER_NAME}  (Socket.IO /socket.io/)"
-echo "  LiveKit wss://${LIVEKIT_SERVER_NAME}  (open SG TCP 7881 + UDP 7882)"
+echo "  Screen  LiveKit Cloud (LIVEKIT_PUBLIC_URL in .env)"
 echo
 "${DOCKER[@]}" compose ps
