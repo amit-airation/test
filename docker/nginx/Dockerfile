@@ -7,10 +7,8 @@ COPY templates/ /etc/nginx/templates/
 
 ENV API_UPSTREAM=api:3001 \
     WEB_UPSTREAM=web:3000 \
-    LIVEKIT_UPSTREAM=livekit:7880 \
     UI_SERVER_NAME=test.amitverma01.dev \
-    API_SERVER_NAME=api.test.amitverma01.dev \
-    LIVEKIT_SERVER_NAME=live.test.amitverma01.dev
+    API_SERVER_NAME=api.test.amitverma01.dev
 
 EXPOSE 80 443
 
