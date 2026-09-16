@@ -11,8 +11,10 @@ COPY package.json package-lock.json ./
 COPY apps/web ./apps/web
 ARG NEXT_PUBLIC_API_URL=https://api.test.amitverma01.dev/api
 ARG NEXT_PUBLIC_WS_URL=https://api.test.amitverma01.dev
+ARG NEXT_PUBLIC_EVENT_KEY=
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
     NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL} \
+    NEXT_PUBLIC_EVENT_KEY=${NEXT_PUBLIC_EVENT_KEY} \
     NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app/apps/web
 RUN npm run build

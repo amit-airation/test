@@ -89,6 +89,10 @@ change.
 
 - Production setup (EC2 / Compose / webhook / runbook):
   [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md).
+- Live `.env` includes `ADMIN_KEY`, `EVENT_ACCESS_KEY`,
+  matching `NEXT_PUBLIC_EVENT_KEY`, webhook secret, LiveKit.
+  Web Dockerfile bakes `NEXT_PUBLIC_EVENT_KEY` — rebuild web
+  after changing it (`docker compose up -d --build`).
 - Local webhook + UI walkthrough:
   [`docs/LOCAL_TESTING.md`](../docs/LOCAL_TESTING.md).
 - Open `/competition/<uuid>` after creating a competition
