@@ -10,6 +10,7 @@ import {
   RoundStatus,
 } from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
+import { ROUND_START_BUFFER_SECONDS } from '../constants.js';
 import { InvalidRoundTransitionException } from '../exceptions.js';
 import { ROUND_PARTICIPANT_RANK_ORDER } from '../utils/rank-order.js';
 import { WS_EVENTS } from '../ws-events.js';
@@ -119,6 +120,7 @@ export class RoundLifecycleService {
           metadata: {
             actualStartAt: actualStartAt.toISOString(),
             endAt: endAt.toISOString(),
+            startBufferSeconds: ROUND_START_BUFFER_SECONDS,
           },
         },
       });

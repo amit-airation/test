@@ -201,11 +201,12 @@ x-admin-key: <ADMIN_KEY>
 Effects:
 
 1. Round status → `LIVE`
-2. `actualStartAt` / `endAt` set from server clock + `durationSeconds`
+2. **5-second warm-up**: `actualStartAt = now + 5s`, then
+   `endAt = actualStartAt + durationSeconds`
 3. Competition `activeRoundId` → this round
 4. Socket.IO `ROUND_STARTED` + `ACTIVE_ROUND_CHANGED`
-5. Scoring window opens: receive time in
-   `[actualStartAt, endAt + 3s]`
+5. Clients show a 5…4…3…2…1 countdown; scoring starts at
+   `actualStartAt` (window `[actualStartAt, endAt + 3s]`)
 
 If another round is already `LIVE`, the API returns **409**.
 

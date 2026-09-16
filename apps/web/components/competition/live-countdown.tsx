@@ -16,9 +16,12 @@ function formatTime(seconds: number) {
 
 export function LiveCountdown({ timer, status }: LiveCountdownProps) {
   const [remaining, setRemaining] = useState<number | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   useEffect(() => {
-    if (status !== 'LIVE' || !timer?.end_at) {
+    if (status !== 'LIVE' || !timer?.start_at || !timer?.end_at) {
+      setRemaining(null);
+      setCountdown(null);
       return;
     }
 
@@ -28,7 +31,14 @@ export function LiveCountdown({ timer, status }: LiveCountdownProps) {
 
     const update = () => {
       const serverNow = Date.now() - clockOffset;
+      const startAt = new Date(timer.start_at as string).getTime();
       const endAt = new Date(timer.end_at as string).getTime();
+      if (serverNow < startAt) {
+        setCountdown(Math.max(0, Math.ceil((startAt - serverNow) / 1000)));
+        setRemaining(timer.duration_seconds);
+        return;
+      }
+      setCountdown(0);
       setRemaining(Math.max(0, Math.ceil((endAt - serverNow) / 1000)));
     };
 
@@ -38,30 +48,50 @@ export function LiveCountdown({ timer, status }: LiveCountdownProps) {
       window.clearTimeout(initialUpdate);
       window.clearInterval(interval);
     };
-  }, [status, timer?.end_at, timer?.server_time]);
+  }, [
+    status,
+    timer?.start_at,
+    timer?.end_at,
+    timer?.server_time,
+    timer?.duration_seconds,
+  ]);
 
+  const inCountdown =
+    status === 'LIVE' && countdown != null && countdown > 0;
   const displayedRemaining =
     remaining ?? timer?.time_remaining_seconds ?? 0;
-  const urgent = status === 'LIVE' && displayedRemaining <= 30;
+  const urgent =
+    status === 'LIVE' && !inCountdown && displayedRemaining <= 30;
   const finished = status === 'ENDED' || status === 'FINALIZED';
 
   return (
     <div className="text-center" aria-live="polite">
       <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-text sm:text-sm">
-        {finished ? 'Competition status' : 'Time remaining'}
+        {finished
+          ? 'Competition status'
+          : inCountdown
+            ? 'Starting in'
+            : 'Time remaining'}
       </p>
       <p
-        className={`mt-1 font-mono text-5xl font-semibold tabular-nums tracking-tight sm:text-7xl lg:text-8xl ${
-          urgent ? 'animate-pulse text-live-danger' : 'text-foreground'
+        className={`mt-1 font-mono font-semibold tabular-nums tracking-tight ${
+          inCountdown
+            ? 'text-8xl text-primary-accent sm:text-9xl'
+            : urgent
+              ? 'animate-pulse text-5xl text-live-danger sm:text-7xl lg:text-8xl'
+              : 'text-5xl text-foreground sm:text-7xl lg:text-8xl'
         }`}
       >
         {status === 'FINALIZED'
           ? 'FINAL RESULTS'
-          : status === 'ENDED' || (status === 'LIVE' && remaining === 0)
+          : status === 'ENDED' ||
+              (status === 'LIVE' && !inCountdown && remaining === 0)
             ? "TIME'S UP"
-            : status === 'LIVE'
-              ? formatTime(displayedRemaining)
-              : 'WAITING'}
+            : inCountdown
+              ? String(countdown)
+              : status === 'LIVE'
+                ? formatTime(displayedRemaining)
+                : 'WAITING'}
       </p>
     </div>
   );

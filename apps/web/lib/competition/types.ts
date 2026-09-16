@@ -30,10 +30,12 @@ export const CLIENT_WS_ACTIONS = {
 export type TimerSnapshot = {
   round_id: string;
   status: string;
+  phase?: 'idle' | 'countdown' | 'running' | 'ended';
   server_time: string;
   start_at: string | null;
   end_at: string | null;
   duration_seconds: number;
+  countdown_to_start_seconds?: number | null;
   time_remaining_seconds: number | null;
 };
 

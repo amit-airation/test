@@ -18,9 +18,10 @@ type CountdownProps = {
 
 export function Countdown({ timer, status }: CountdownProps) {
   const [remaining, setRemaining] = useState<number | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!timer?.end_at || status !== 'LIVE') {
+    if (!timer?.end_at || !timer?.start_at || status !== 'LIVE') {
       return;
     }
 
@@ -29,8 +30,15 @@ export function Countdown({ timer, status }: CountdownProps) {
     const skewMs = clientSnapshotAt - serverSnapshotAt;
 
     const tick = () => {
+      const start = new Date(timer.start_at as string).getTime();
       const end = new Date(timer.end_at as string).getTime();
       const now = Date.now() - skewMs;
+      if (now < start) {
+        setCountdown(Math.max(0, Math.ceil((start - now) / 1000)));
+        setRemaining(timer.duration_seconds);
+        return;
+      }
+      setCountdown(0);
       setRemaining(Math.max(0, Math.ceil((end - now) / 1000)));
     };
 
@@ -40,28 +48,42 @@ export function Countdown({ timer, status }: CountdownProps) {
       window.clearTimeout(initialTick);
       window.clearInterval(id);
     };
-  }, [timer?.end_at, timer?.server_time, status]);
+  }, [
+    timer?.end_at,
+    timer?.start_at,
+    timer?.server_time,
+    timer?.duration_seconds,
+    status,
+  ]);
 
+  const inCountdown = status === 'LIVE' && countdown != null && countdown > 0;
   const displayedRemaining =
     remaining ?? timer?.time_remaining_seconds ?? null;
   const urgent =
     displayedRemaining != null &&
     displayedRemaining <= 30 &&
-    status === 'LIVE';
+    status === 'LIVE' &&
+    !inCountdown;
 
   return (
     <div className="text-center">
       <p className="text-sm uppercase tracking-wide text-muted-text">
-        Time remaining
+        {inCountdown ? 'Starting in' : 'Time remaining'}
       </p>
       <p
-        className={`mt-1 font-mono text-6xl font-semibold tabular-nums tracking-tight ${
-          urgent ? 'text-live-danger' : 'text-foreground'
+        className={`mt-1 font-mono font-semibold tabular-nums tracking-tight ${
+          inCountdown
+            ? 'text-7xl text-primary-accent'
+            : urgent
+              ? 'text-6xl text-live-danger'
+              : 'text-6xl text-foreground'
         }`}
         aria-live="polite"
       >
         {status === 'LIVE'
-          ? formatClock(displayedRemaining)
+          ? inCountdown
+            ? String(countdown)
+            : formatClock(displayedRemaining)
           : formatClock(null)}
       </p>
     </div>

@@ -3,6 +3,9 @@ export const DEFAULT_ROUND_DURATION_SECONDS = 300;
 /** Shared competition join PIN assigned on create (admin can change). */
 export const DEFAULT_JOIN_PIN = '123456';
 
+/** Warm-up after admin Start before scoring / competition clock. */
+export const ROUND_START_BUFFER_SECONDS = 5;
+
 /** Scoring grace period after round.endAt (milliseconds). */
 export const ROUND_GRACE_PERIOD_MS = 3_000;
 

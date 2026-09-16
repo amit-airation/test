@@ -110,13 +110,26 @@ describe('ScreenShareService', () => {
     expect(TrackSource.SCREEN_SHARE).toBeDefined();
   });
 
-  it('rejects publish when the round is not LIVE', async () => {
+  it('issues a publish token before the round is LIVE', async () => {
+    const { service } = build({
+      round: { status: RoundStatus.DRAFT, endAt: null },
+    });
+    const result = await service.issueToken(
+      'r1',
+      'co1',
+      'Jane Smith',
+      'publish',
+    );
+    expect(result.can_publish).toBe(true);
+  });
+
+  it('rejects publish when the round has ended', async () => {
     const { service } = build({
       round: { status: RoundStatus.ENDED },
     });
     await expect(
       service.issueToken('r1', 'co1', 'Jane Smith', 'publish'),
-    ).rejects.toThrow(/LIVE/);
+    ).rejects.toThrow(/ended/i);
   });
 
   it('rejects publish for disqualified participants', async () => {

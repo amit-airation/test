@@ -80,6 +80,8 @@ export function ObserverDashboard({ competitionId }: ObserverDashboardProps) {
   const urgent =
     isViewingActive &&
     isViewedRoundLive &&
+    live.timer?.phase !== 'countdown' &&
+    (live.timer?.countdown_to_start_seconds ?? 0) === 0 &&
     (live.timer?.time_remaining_seconds ?? 31) <= 30;
 
   return (

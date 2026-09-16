@@ -22,6 +22,13 @@ const DEFAULT_TTL_SECONDS = 3600;
 const MIN_TTL_SECONDS = 60;
 const WEAK_LIVEKIT_SECRETS = new Set(['secret', 'devkey', 'change-me']);
 
+/** Share before start is allowed; stop after the round is over. */
+const SCREEN_SHARE_ALLOWED: ReadonlySet<RoundStatus> = new Set([
+  RoundStatus.DRAFT,
+  RoundStatus.SCHEDULED,
+  RoundStatus.LIVE,
+]);
+
 export function screenShareRoomName(roundId: string) {
   return `hirance-round-${roundId}`;
 }
@@ -70,9 +77,9 @@ export class ScreenShareService {
     });
     if (!round) throw new NotFoundException(`Round ${roundId} not found`);
 
-    if (round.status !== RoundStatus.LIVE) {
+    if (!SCREEN_SHARE_ALLOWED.has(round.status)) {
       throw new ForbiddenException(
-        'Screen sharing is only available while the round is LIVE',
+        'Screen sharing is not available after the round has ended',
       );
     }
 

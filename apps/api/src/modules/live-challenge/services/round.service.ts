@@ -66,8 +66,30 @@ export class RoundService {
           metadata: { roundNumber: dto.roundNumber },
         },
       });
+      // So participants can join + screen-share before start
+      if (!competition.activeRoundId) {
+        await tx.competition.update({
+          where: { id: competitionId },
+          data: { activeRoundId: created.id },
+        });
+      }
       return created;
     });
+
+    if (!competition.activeRoundId) {
+      this.realtime.emitActiveRoundChanged({
+        event: WS_EVENTS.ACTIVE_ROUND_CHANGED,
+        competition_id: competitionId,
+        active_round_id: round.id,
+        round: {
+          id: round.id,
+          name: round.name,
+          round_number: round.roundNumber,
+          status: round.status,
+          timer: this.timer.buildSnapshot(round),
+        },
+      });
+    }
 
     this.logger.log({
       event: 'round_created',

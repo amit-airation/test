@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { JoinGate } from '@/components/competition/join-gate';
 import { ConnectionBanner } from '@/components/competition/connection-banner';
 import { ScreenShareControls } from '@/components/competition/screen-share-controls';
+import { StartCountdown } from '@/components/competition/start-countdown';
 import { StatusBadge } from '@/components/competition/status-badge';
 import { clearIdentity, type SessionIdentity } from '@/lib/competition/session';
 import { useCompetitionSocket } from '@/lib/competition/use-competition-socket';
@@ -35,6 +36,7 @@ export function ParticipantDashboard({ competitionId }: ParticipantDashboardProp
 
   return (
     <div className="min-h-screen bg-background px-4 py-8 sm:px-8">
+      <StartCountdown timer={live.timer} status={live.roundStatus} />
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -101,12 +103,15 @@ export function ParticipantDashboard({ competitionId }: ParticipantDashboardProp
             role="status"
             className="rounded-xl border border-border bg-surface px-4 py-3 text-sm text-muted-text"
           >
-            Waiting for the admin to start a round.
+            Waiting for the admin to set an active round.
           </div>
         ) : null}
 
         {live.roundStatus &&
         live.roundStatus !== 'LIVE' &&
+        live.roundStatus !== 'ENDED' &&
+        live.roundStatus !== 'FINALIZED' &&
+        live.roundStatus !== 'CANCELLED' &&
         live.activeRoundId &&
         !notInRound &&
         live.participantStatus !== 'DISQUALIFIED' ? (
@@ -114,8 +119,8 @@ export function ParticipantDashboard({ competitionId }: ParticipantDashboardProp
             role="status"
             className="rounded-xl border border-border bg-surface px-4 py-3 text-sm text-muted-text"
           >
-            Waiting for the round to go live. Screen share unlocks when the
-            round starts.
+            Round is not live yet — you can still share your screen while you
+            wait.
           </div>
         ) : null}
 

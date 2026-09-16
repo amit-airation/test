@@ -46,8 +46,11 @@ export function ScreenShareControls({
   const [state, setState] = useState<ShareState>('checking');
   const [message, setMessage] = useState<string | null>(null);
 
-  const live = roundStatus === 'LIVE';
   const disqualified = participantStatus === 'DISQUALIFIED';
+  const shareBlocked =
+    roundStatus === 'ENDED' ||
+    roundStatus === 'FINALIZED' ||
+    roundStatus === 'CANCELLED';
 
   useEffect(() => {
     if (!roundId) {
@@ -66,11 +69,11 @@ export function ScreenShareControls({
   }, [competitionId, roundId]);
 
   useEffect(() => {
-    if (!live || disqualified) {
+    if (shareBlocked || disqualified) {
       void stopSharing(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, disqualified]);
+  }, [shareBlocked, disqualified]);
 
   useEffect(() => {
     return () => { void stopSharing(false); };
@@ -92,7 +95,7 @@ export function ScreenShareControls({
   };
 
   const startSharing = async () => {
-    if (!roundId) return;
+    if (!roundId || shareBlocked) return;
     setMessage(null);
     setState('requesting');
     try {
@@ -156,10 +159,10 @@ export function ScreenShareControls({
     );
   }
 
-  if (!live) {
+  if (shareBlocked) {
     return (
       <p className="text-sm text-muted-text" role="status">
-        Screen sharing is available while the round is LIVE.
+        Screen sharing is not available after the round has ended.
       </p>
     );
   }
@@ -172,7 +175,8 @@ export function ScreenShareControls({
         </p>
       ) : (
         <p className="text-sm text-muted-text">
-          Share your screen with observers. This never affects your score.
+          Share your screen with observers. You can start before the round goes
+          live. This never affects your score.
         </p>
       )}
       {message ? (
